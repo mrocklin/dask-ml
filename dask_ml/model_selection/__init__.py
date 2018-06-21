@@ -5,7 +5,7 @@ on the underlying estimators being used.
 """
 from dask_searchcv.model_selection import GridSearchCV, RandomizedSearchCV  # noqa
 from ._split import ShuffleSplit, train_test_split
-from ._hyperband import Hyperband
+from ._hyperband import HyperbandCV
 
 
 __all__ = [
@@ -13,5 +13,5 @@ __all__ = [
     'RandomizedSearchCV',
     'ShuffleSplit',
     'train_test_split',
-    'Hyperband',
+    'HyperbandCV',
 ]

@@ -7,7 +7,7 @@ from distributed import Client
 from distributed.utils_test import loop, cluster
 
 from dask_ml.datasets import make_classification
-from dask_ml.model_selection import Hyperband
+from dask_ml.model_selection import HyperbandCV
 
 
 class ConstantFunction:
@@ -41,7 +41,7 @@ def test_info(max_iter, loop):
             model = ConstantFunction()
 
             params = {'value': stats.uniform(0, 1)}
-            alg = Hyperband(model, params, max_iter=max_iter)
+            alg = HyperbandCV(model, params, max_iter=max_iter)
             info = alg.info()
             paper_alg_info = _hyperband_paper_alg(max_iter)
 

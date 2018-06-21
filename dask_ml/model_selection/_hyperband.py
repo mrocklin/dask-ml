@@ -133,7 +133,7 @@ def _hyperband(client, model, params, x, y, R=9, eta=3, async=None,
     return list(completed_jobs.values())
 
 
-class Hyperband(DaskBaseSearchCV):
+class HyperbandCV(DaskBaseSearchCV):
     def __init__(self, model, params, max_iter=81, client=None, async=False):
         self.model = model
         self.params = params
