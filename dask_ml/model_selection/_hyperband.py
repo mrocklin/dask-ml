@@ -12,10 +12,10 @@ def _get_nr(R, eta=3):
     s_max = math.floor(math.log(R, eta))
     B = (s_max + 1) * R
 
-    brackets = list(reversed(range(s_max + 1)))
+    brackets = list(reversed(range(int(s_max + 1))))
     N = [math.ceil(B / R * eta**s / (s + 1)) for s in brackets]
     R = [int(R * eta**-s) for s in brackets]
-    return N, R, brackets
+    return list(map(int, N)), list(map(int, R)), brackets
 
 
 def _partial_fit(model_and_meta, x, y, meta=None, fit_params={},
@@ -31,6 +31,7 @@ def _partial_fit(model_and_meta, x, y, meta=None, fit_params={},
 
 
 def _score(model_and_meta, x, y, seed=42, dry_run=False):
+    seed = seed % 2**32 - 1
     model, meta = model_and_meta
     rng = np.random.RandomState(seed)
     if dry_run:
@@ -39,17 +40,18 @@ def _score(model_and_meta, x, y, seed=42, dry_run=False):
         # TODO: change this to dask_ml.get_scorer
         #  score = model.score(x, y)
         score = rng.rand()
-    return {"score": score, **meta}
+    meta.update(score=score)
+    return meta
 
 
 def _top_k(results, k=1, sort="score"):
     scores = [r[sort] for r in results]
-    i = np.argsort(scores)
-    out = [results[i] for i in i[-k:]]
+    idx = np.argsort(scores)
+    out = [results[i] for i in idx[-k:]]
     return out
 
 
-def _to_promote(result, completed_jobs, async=None, eta=None):
+def _to_promote(result, completed_jobs, async_=None, eta=None):
     bracket_models = [r for r in completed_jobs
                       if r['bracket_iter'] == result['bracket_iter'] and
                       r['bracket'] == result['bracket']]
@@ -81,11 +83,12 @@ def _model_id(s, n_i):
     return "bracket={s}-{n_i}".format(s=s, n_i=n_i)
 
 
-def _hyperband(client, model, params, x, y, R=9, eta=3, async=None,
-               dry_run=False, fit_params={}):
-    N, R, brackets = _get_nr(R, eta=eta)
+def _hyperband(client, model, params, X, y, max_iter=None, eta=None,
+               async_=None, dry_run=False, fit_params={}):
+    N, R, brackets = _get_nr(max_iter, eta=eta)
     params = iter(ParameterSampler(params, n_iter=sum(N)))
-    model_futures = {_model_id(s, n_i): client.submit(_create_model, model, next(params))
+    model_futures = {_model_id(s, n_i): client.submit(_create_model, model,
+                                                      next(params))
                      for s, n, r in zip(brackets, N, R) for n_i in range(n)}
 
     info = {s: [{"partial_fit_calls": r, "bracket": _bracket_name(s),
@@ -95,16 +98,17 @@ def _hyperband(client, model, params, x, y, R=9, eta=3, async=None,
                 for n_i in range(n)]
             for s, n, r in zip(brackets, N, R)}
 
-    model_meta_futures = {meta["model_id"]: client.submit(_partial_fit,
-                                                          model_futures[meta["model_id"]],
-                                                          x, y, meta=meta,
-                                                          dry_run=dry_run,
-                                                          fit_params=fit_params)
-                              for _, r_metas in info.items() for meta in r_metas}
+    kwargs = {'dry_run': dry_run, 'fit_params': fit_params}
+    model_meta_futures = {meta["model_id"]:
+                          client.submit(_partial_fit,
+                                        model_futures[meta["model_id"]], X, y,
+                                        meta=meta, **kwargs)
+                          for _, r_metas in info.items()
+                          for meta in r_metas}
 
-    score_futures = [client.submit(_score, model_meta_future, x, y,
-                                   seed=hash(model_id) % 2**32 - 1, dry_run=dry_run)
-                     for model_id, model_meta_future in model_meta_futures.items()]
+    score_futures = [client.submit(_score, model_meta_future, X, y,
+                                   seed=hash(_id), dry_run=dry_run)
+                     for _id, model_meta_future in model_meta_futures.items()]
 
     completed_jobs = {}
     seq = as_completed(score_futures)
@@ -120,12 +124,12 @@ def _hyperband(client, model, params, x, y, R=9, eta=3, async=None,
         for job in jobs:
             # This block prevents communication of the model
             model_future = model_futures[job["model_id"]]
-            model_future = client.submit(_partial_fit, model_future, x, y,
+            model_future = client.submit(_partial_fit, model_future, X, y,
                                          meta=job, dry_run=dry_run,
                                          fit_params=fit_params)
 
-            score_future = client.submit(_score, model_future, x, y,
-                                         seed=hash(job['model_id']) % 2**32 - 1,
+            score_future = client.submit(_score, model_future, X, y,
+                                         seed=hash(job['model_id']),
                                          dry_run=dry_run)
             model_futures[job["model_id"]] = model_future
             seq.add(score_future)
@@ -134,18 +138,16 @@ def _hyperband(client, model, params, x, y, R=9, eta=3, async=None,
 
 
 class HyperbandCV(DaskBaseSearchCV):
-    def __init__(self, model, params, max_iter=81, client=None, async=False):
+    def __init__(self, model, params, max_iter=81, client=None, async_=False):
         self.model = model
         self.params = params
         self.client = default_client()
-        self.async = async
+        self.async_ = async_
         self.max_iter = max_iter
 
-    def fit(self, x, y, **fit_params):
-        x = y = None
-
-        history = _hyperband(self.client, self.model, self.params, x, y,
-                             async=self.async, R=self.max_iter,
+    def fit(self, X, y, **fit_params):
+        history = _hyperband(self.client, self.model, self.params, X, y,
+                             async_=self.async_, max_iter=self.max_iter,
                              fit_params=fit_params)
         self.history = history
 
@@ -155,15 +157,17 @@ class HyperbandCV(DaskBaseSearchCV):
     def info(self):
         x = y = None
         history = _hyperband(self.client, self.model, self.params, x, y,
-                             async=self.async, R=self.max_iter, dry_run=True)
+                             async_=self.async_, R=self.max_iter, dry_run=True)
         brackets = groupby("bracket", history)
         keys = sorted(brackets.keys())
         values = [brackets[k] for k in keys]
         bracket_info = [{'num_models': max(r['num_models'] for r in v),
-                         'partial_fit_calls': sum(r['partial_fit_calls'] for r in v),
+                         'partial_fit_calls': sum(r['partial_fit_calls']
+                                                  for r in v),
                          'bracket': k}
                         for k, v in zip(keys, values)]
-        info = {'total_partial_fit_calls': sum(r['partial_fit_calls'] for r in history),
+        info = {'total_partial_fit_calls': sum(r['partial_fit_calls']
+                                               for r in history),
                 'total_models': len(set([r['model_id'] for r in history]))}
         res = {'brackets': bracket_info}
         res.update(**info)

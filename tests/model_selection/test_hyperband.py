@@ -71,7 +71,7 @@ def _hyperband_paper_alg(R, eta=3):
     """
     s_max = math.floor(math.log(R, eta))
     B = (s_max + 1) * R
-    brackets = reversed(range(s_max + 1))
+    brackets = reversed(range(int(s_max + 1)))
     hists = {}
     for s in brackets:
         n = int(math.ceil(B / R * eta**s / (s + 1)))
