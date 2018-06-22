@@ -4,6 +4,7 @@ from multiprocessing import cpu_count
 
 import pandas as pd
 import numpy as np
+from sklearn.base import BaseEstimator
 
 import dask.array as da
 import dask.dataframe as dd
@@ -241,7 +242,26 @@ def _format_bytes(n):
     return '%d B' % n
 
 
+class ConstantFunction(BaseEstimator):
+    def __init__(self, value=0, **kwargs):
+        self.value = value
+        super(BaseEstimator, self).__init__(**kwargs)
+
+    def _fn(self):
+        return self.value
+
+    def partial_fit(self, *args, **kwargs):
+        return self
+
+    def score(self, *args, **kwargs):
+        return self._fn()
+
+    def fit(self, *args):
+        return self
+
+
 __all__ = ['assert_estimator_equal',
            'check_array',
            'check_random_state',
-           'check_chunks']
+           'check_chunks',
+           'ConstantFunction']

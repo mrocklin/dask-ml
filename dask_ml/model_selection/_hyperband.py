@@ -49,10 +49,7 @@ def _score(model_and_meta, x, y, dry_run=False):
 
 
 def _top_k(results, k=1, sort="score"):
-    scores = [r[sort] for r in results]
-    idx = np.argsort(scores)
-    out = [results[i] for i in idx[-k:]]
-    return out
+    return sorted(results, key=lambda x: x[sort])[-k:]
 
 
 def _to_promote(result, completed_jobs, eta=None):
@@ -74,8 +71,8 @@ def _to_promote(result, completed_jobs, eta=None):
     return []
 
 
-def _create_model(model, params, random_state=42):
-    model = clone(model).set_params(random_state=random_state, **params)
+def _create_model(model, params):
+    model = clone(model).set_params(**params)
     return model, {'iterations': 0}
 
 
@@ -93,8 +90,7 @@ def _hyperband(client, model, params, X, y, max_iter=None, eta=None,
     params = iter(ParameterSampler(params, n_iter=sum(N),
                                    random_state=random_state))
     model_futures = {_model_id(s, n_i):
-                     client.submit(_create_model, model, next(params),
-                                   random_state=random_state)
+                     client.submit(_create_model, model, next(params))
                      for s, n, r in zip(brackets, N, R) for n_i in range(n)}
 
     r = train_test_split(X, y, test_size=0.15, random_state=random_state)
@@ -159,8 +155,8 @@ def _hyperband(client, model, params, X, y, max_iter=None, eta=None,
 
 
 class HyperbandCV(DaskBaseSearchCV):
-    def __init__(self, model, params, max_iter=81, client=None,
-                 eta=3, random_state=42, scoring=None):
+    def __init__(self, model, params, max_iter=81, eta=3, random_state=42,
+                 scoring=None, iid=True, cv=2, cache_cv=False, **kwargs):
         self.model = model
         self.params = params
         self.client = default_client()
@@ -168,6 +164,23 @@ class HyperbandCV(DaskBaseSearchCV):
         self.eta = eta
         self.random_state = random_state
         self.scoring = scoring
+        if not iid:
+            raise ValueError('Please specify iid=True. Hyperband assumes that '
+                             'each observation is independent and '
+                             'identitically distributed because it trains on '
+                             'each block of X and y')
+        if cv != 2:
+            raise ValueError('Please specify cv=2. Future work is to '
+                             'allow arbitrary cross-validation (and pull '
+                             'request welcome!).')
+        if cache_cv:
+            raise ValueError('Please specify cv_cache=False. We do not '
+                             'support caching intermediate results yet, '
+                             'but this is on the roadmap (and pull requests '
+                             'welcome!).')
+
+        super(HyperbandCV, self).__init__(model, iid=iid, cv=cv,
+                                          cache_cv=cache_cv, **kwargs)
 
     def fit(self, X, y, **fit_params):
         if isinstance(X, np.ndarray):

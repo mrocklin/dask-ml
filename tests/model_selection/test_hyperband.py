@@ -12,28 +12,19 @@ import dask.array as da
 from dask_ml.datasets import make_classification
 from dask_ml.model_selection import HyperbandCV
 from dask_ml.wrappers import Incremental
+from dask_ml.model_selection._hyperband import _top_k
+from dask_ml.utils import ConstantFunction
 
 
-class ConstantFunction(dict):
-    def _fn(self):
-        return self.value
-
-    def get_params(self, deep=None, **kwargs):
-        return {k: getattr(self, k) for k, v in kwargs.items()}
-
-    def set_params(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-        return self
-
-    def partial_fit(self, *args, **kwargs):
-        pass
-
-    def score(self, *args, **kwargs):
-        return self._fn()
-
-    def fit(self, *args):
-        pass
+def test_top_k():
+    in_ = [{'score': 0, 'model': '0'},
+           {'score': 1, 'model': '1'},
+           {'score': 2, 'model': '2'},
+           {'score': 3, 'model': '3'},
+           {'score': 4, 'model': '4'}]
+    out = _top_k(in_, k=2, sort="score")
+    assert out == [{'score': 3, 'model': '3'},
+                   {'score': 4, 'model': '4'}]
 
 
 @pytest.mark.parametrize("array_type", ["numpy", "dask.array"])
@@ -75,7 +66,7 @@ def test_sklearn(array_type, library, loop, max_iter=9):
             assert 1 <= min(iters) < max(iters) <= max_iter
 
 
-@pytest.mark.parametrize("max_iter", [81])
+@pytest.mark.parametrize("max_iter", [3, 9, 27])
 def test_info(max_iter, loop):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
@@ -84,17 +75,19 @@ def test_info(max_iter, loop):
             alg = HyperbandCV(model, params, max_iter=max_iter, random_state=0)
             info = alg.info()
             paper_alg_info = _hyperband_paper_alg(max_iter)
-
-            assert set(paper_alg_info.keys()) == set([b['bracket']
-                                                      for b in info['brackets']])
-            assert info['total_partial_fit_calls'] == sum(paper_alg_info.values())
+            saved = {27: {'bracket=3': 63, 'bracket=2': 60, 'bracket=1': 90,
+                          'bracket=0': 108},
+                     9: {'bracket=2': 15, 'bracket=1': 15, 'bracket=0': 27},
+                     3: {'bracket=1': 3, 'bracket=0': 6}}
+            assert paper_alg_info == saved[max_iter]
+            assert (info['total_partial_fit_calls'] ==
+                    sum(paper_alg_info.values()) ==
+                    sum(b['partial_fit_calls'] for b in info['brackets']))
             for bracket in info['brackets']:
                 k = bracket['bracket']
                 assert bracket['partial_fit_calls'] == paper_alg_info[k]
-            assert info['total_partial_fit_calls'] == sum(b['partial_fit_calls']
-                                                          for b in info['brackets'])
-            assert info['total_models'] == sum(b['num_models']
-                                               for b in info['brackets'])
+            assert (info['total_models'] ==
+                    sum(b['num_models'] for b in info['brackets']))
 
             X, y = make_classification(n_samples=10, n_features=4, chunks=10)
             alg.fit(X, y)
