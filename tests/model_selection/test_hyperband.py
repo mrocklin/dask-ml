@@ -3,14 +3,18 @@ import numpy as np
 import scipy.stats as stats
 import math
 
+from sklearn.linear_model import SGDClassifier
+
 from distributed import Client
 from distributed.utils_test import loop, cluster
+import dask.array as da
 
 from dask_ml.datasets import make_classification
 from dask_ml.model_selection import HyperbandCV
+from dask_ml.wrappers import Incremental
 
 
-class ConstantFunction:
+class ConstantFunction(dict):
     def _fn(self):
         return self.value
 
@@ -32,16 +36,52 @@ class ConstantFunction:
         pass
 
 
+@pytest.mark.parametrize("array_type", ["numpy", "dask.array"])
+@pytest.mark.parametrize("library", ["dask-ml", "sklearn"])
+def test_sklearn(array_type, library, loop, max_iter=9):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            chunk_size = 20
+            X, y = make_classification(n_samples=100, n_features=20,
+                                       random_state=42, chunks=chunk_size)
+            if array_type == "numpy":
+                X = X.compute()
+                y = y.compute()
+                chunk_size = X.shape[0]
+
+            kwargs = dict(tol=1e-3, penalty='elasticnet', random_state=42)
+            if library == "sklearn":
+                model = SGDClassifier(**kwargs)
+            elif library == "dask-ml":
+                model = Incremental(SGDClassifier(), **kwargs)
+
+            params = {'alpha': np.logspace(-2, 1, num=1000),
+                      'l1_ratio': np.linspace(0, 1, num=1000),
+                      'average': [True, False]}
+            search = HyperbandCV(model, params, max_iter=max_iter,
+                                 random_state=42)
+            search.fit(X, y, classes=da.unique(y))
+
+            models = [v[0] for v in search._models_and_meta.values()]
+            assert all(hasattr(model, "t_") for model in models)
+
+            # Test fraction of 0.15 is hardcoded into _hyperband
+            def _iters(model):
+                t_ = (model.estimator.t_ if hasattr(model, 'estimator')
+                      else model.t_)
+                return (t_ - 1) / (chunk_size * (1 - 0.15))
+            iters = {_iters(model) for model in models}
+            assert len(iters) > 1
+            assert 1 <= min(iters) < max(iters) <= max_iter
+
+
 @pytest.mark.parametrize("max_iter", [81])
 def test_info(max_iter, loop):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
-            X, y = make_classification(n_samples=20, n_features=20, chunks=20)
-
             model = ConstantFunction()
-
             params = {'value': stats.uniform(0, 1)}
-            alg = HyperbandCV(model, params, max_iter=max_iter)
+            alg = HyperbandCV(model, params, max_iter=max_iter, random_state=0)
             info = alg.info()
             paper_alg_info = _hyperband_paper_alg(max_iter)
 
@@ -55,6 +95,11 @@ def test_info(max_iter, loop):
                                                           for b in info['brackets'])
             assert info['total_models'] == sum(b['num_models']
                                                for b in info['brackets'])
+
+            X, y = make_classification(n_samples=10, n_features=4, chunks=10)
+            alg.fit(X, y)
+            info_after_fit = alg.info(history=alg.history_)
+            assert info_after_fit == info
 
 
 def _hyperband_paper_alg(R, eta=3):

@@ -2,10 +2,14 @@ import math
 import numpy as np
 from sklearn.base import clone
 from sklearn.model_selection import ParameterSampler
+from sklearn.utils import check_random_state
 
 from toolz import groupby
 from distributed import as_completed, default_client
 from dask_searchcv.model_selection import DaskBaseSearchCV
+import dask.array as da
+from ..datasets import make_classification
+from ._split import train_test_split
 
 
 def _get_nr(R, eta=3):
@@ -19,7 +23,10 @@ def _get_nr(R, eta=3):
 
 
 def _partial_fit(model_and_meta, x, y, meta=None, fit_params={},
-                 dry_run=False):
+                 dry_run=False, **kwargs):
+    assert len(x) == 1
+    x = x[0].compute()
+    y = y.compute()
     model, m = model_and_meta
     if meta is None:
         meta = m
@@ -30,16 +37,13 @@ def _partial_fit(model_and_meta, x, y, meta=None, fit_params={},
     return model, meta
 
 
-def _score(model_and_meta, x, y, seed=42, dry_run=False):
-    seed = seed % 2**32 - 1
+def _score(model_and_meta, x, y, dry_run=False):
     model, meta = model_and_meta
-    rng = np.random.RandomState(seed)
     if dry_run:
-        score = rng.rand()
+        score = 0
     else:
         # TODO: change this to dask_ml.get_scorer
-        #  score = model.score(x, y)
-        score = rng.rand()
+        score = model.score(x, y)
     meta.update(score=score)
     return meta
 
@@ -51,7 +55,7 @@ def _top_k(results, k=1, sort="score"):
     return out
 
 
-def _to_promote(result, completed_jobs, async_=None, eta=None):
+def _to_promote(result, completed_jobs, eta=None):
     bracket_models = [r for r in completed_jobs
                       if r['bracket_iter'] == result['bracket_iter'] and
                       r['bracket'] == result['bracket']]
@@ -70,8 +74,8 @@ def _to_promote(result, completed_jobs, async_=None, eta=None):
     return []
 
 
-def _create_model(model, params):
-    model = clone(model).set_params(**params)
+def _create_model(model, params, random_state=42):
+    model = clone(model).set_params(random_state=random_state, **params)
     return model, {'iterations': 0}
 
 
@@ -84,12 +88,22 @@ def _model_id(s, n_i):
 
 
 def _hyperband(client, model, params, X, y, max_iter=None, eta=None,
-               async_=None, dry_run=False, fit_params={}):
+               dry_run=False, fit_params={}, random_state=42):
     N, R, brackets = _get_nr(max_iter, eta=eta)
-    params = iter(ParameterSampler(params, n_iter=sum(N)))
-    model_futures = {_model_id(s, n_i): client.submit(_create_model, model,
-                                                      next(params))
+    params = iter(ParameterSampler(params, n_iter=sum(N),
+                                   random_state=random_state))
+    model_futures = {_model_id(s, n_i):
+                     client.submit(_create_model, model, next(params),
+                                   random_state=random_state)
                      for s, n, r in zip(brackets, N, R) for n_i in range(n)}
+
+    r = train_test_split(X, y, test_size=0.15, random_state=random_state)
+    X_train, X_test, y_train, y_test = r
+    if isinstance(X, da.Array):
+        X_train = X_train.to_delayed()
+    if isinstance(y, da.Array):
+        y_train = y_train.to_delayed()
+    X_test, y_test = client.scatter([X_test, y_test])
 
     info = {s: [{"partial_fit_calls": r, "bracket": _bracket_name(s),
                  "num_models": n, 'bracket_iter': 0,
@@ -98,16 +112,24 @@ def _hyperband(client, model, params, X, y, max_iter=None, eta=None,
                 for n_i in range(n)]
             for s, n, r in zip(brackets, N, R)}
 
+    rng = check_random_state(random_state)
+    idx = {(i, j): rng.choice(len(X_train))
+           for i, metas in enumerate(info.values())
+           for j, meta in enumerate(metas)}
     kwargs = {'dry_run': dry_run, 'fit_params': fit_params}
     model_meta_futures = {meta["model_id"]:
                           client.submit(_partial_fit,
-                                        model_futures[meta["model_id"]], X, y,
-                                        meta=meta, **kwargs)
-                          for _, r_metas in info.items()
-                          for meta in r_metas}
+                                        model_futures[meta["model_id"]],
+                                        X_train[idx[(i, j)]],
+                                        y_train[idx[(i, j)]],
+                                        meta=meta, id=meta['model_id'],
+                                        **kwargs)
+                          for i, bracket_metas in enumerate(info.values())
+                          for j, meta in enumerate(bracket_metas)}
+    assert set(model_meta_futures.keys()) == set(model_futures.keys())
 
-    score_futures = [client.submit(_score, model_meta_future, X, y,
-                                   seed=hash(_id), dry_run=dry_run)
+    score_futures = [client.submit(_score, model_meta_future, X_test, y_test,
+                                   dry_run=dry_run)
                      for _id, model_meta_future in model_meta_futures.items()]
 
     completed_jobs = {}
@@ -115,49 +137,66 @@ def _hyperband(client, model, params, X, y, max_iter=None, eta=None,
     for future in seq:
         result = future.result()
 
-        # TODO if we want to map partial_fit/score to blocks
-        #  i = get_xy_block_id(result)
-        #  print(result)
-
         completed_jobs[result['model_id']] = result
         jobs = _to_promote(result, completed_jobs.values(), eta=eta)
         for job in jobs:
             # This block prevents communication of the model
+            i = rng.choice(len(X_train))
             model_future = model_futures[job["model_id"]]
-            model_future = client.submit(_partial_fit, model_future, X, y,
+            model_future = client.submit(_partial_fit, model_future,
+                                         X_train[i],
+                                         y_train[i],
                                          meta=job, dry_run=dry_run,
+                                         id=job['model_id'],
                                          fit_params=fit_params)
 
-            score_future = client.submit(_score, model_future, X, y,
-                                         seed=hash(job['model_id']),
+            score_future = client.submit(_score, model_future, X_test, y_test,
                                          dry_run=dry_run)
             model_futures[job["model_id"]] = model_future
             seq.add(score_future)
 
-    return list(completed_jobs.values())
+    return list(completed_jobs.values()), model_futures
 
 
 class HyperbandCV(DaskBaseSearchCV):
-    def __init__(self, model, params, max_iter=81, client=None, async_=False):
+    def __init__(self, model, params, max_iter=81, client=None,
+                 eta=3, random_state=42, scoring=None):
         self.model = model
         self.params = params
         self.client = default_client()
-        self.async_ = async_
         self.max_iter = max_iter
+        self.eta = eta
+        self.random_state = random_state
+        self.scoring = scoring
 
     def fit(self, X, y, **fit_params):
-        history = _hyperband(self.client, self.model, self.params, X, y,
-                             async_=self.async_, max_iter=self.max_iter,
-                             fit_params=fit_params)
-        self.history = history
+        if isinstance(X, np.ndarray):
+            X = da.from_array(X, chunks=X.shape)
+        if isinstance(y, np.ndarray):
+            y = da.from_array(y, chunks=y.shape)
+        r = _hyperband(self.client, self.model, self.params, X, y,
+                       max_iter=self.max_iter,
+                       fit_params=fit_params, eta=self.eta,
+                       random_state=self.random_state)
+        history, model_futures = r
+        self.history_ = history
+        self._model_futures = model_futures
 
         # TODO: set best index, best model, etc
         return self
 
-    def info(self):
-        x = y = None
-        history = _hyperband(self.client, self.model, self.params, x, y,
-                             async_=self.async_, R=self.max_iter, dry_run=True)
+    @property
+    def _models_and_meta(self):
+        return self.client.gather(self._model_futures)
+
+    def info(self, history=None):
+        if history is None:
+            X, y = make_classification(n_samples=10, n_features=4, chunks=10)
+            history, _ = _hyperband(self.client, self.model, self.params, X, y,
+                                    max_iter=self.max_iter,
+                                    dry_run=True, eta=self.eta,
+                                    random_state=self.random_state)
+
         brackets = groupby("bracket", history)
         keys = sorted(brackets.keys())
         values = [brackets[k] for k in keys]
