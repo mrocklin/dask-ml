@@ -329,7 +329,9 @@ def make_classification(n_samples=100, n_features=20, n_informative=2,
                                  chunks=n_informative)
     beta = (rng.random(n_features, chunks=n_features) - 1) * scale
 
-    informative_idx, beta = dask.compute(informative_idx, beta)
+    # We run this immediately to let this function be used in async contexts
+    with dask.config.set(scheduler='single-threaded'):
+        informative_idx, beta = dask.compute(informative_idx, beta)
 
     z0 = X[:, informative_idx].dot(beta[informative_idx])
     y = rng.random(z0.shape, chunks=chunks[0]) < 1 / (1 + da.exp(-z0))
