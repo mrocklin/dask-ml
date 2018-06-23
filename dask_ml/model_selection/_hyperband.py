@@ -71,8 +71,10 @@ def _to_promote(result, completed_jobs, eta=None):
     return []
 
 
-def _create_model(model, params):
+def _create_model(model, params, random_state=42):
     model = clone(model).set_params(**params)
+    if 'random_state' in model.get_params():
+        model.set_params(random_state=random_state)
     return model, {'iterations': 0}
 
 
@@ -86,11 +88,13 @@ def _model_id(s, n_i):
 
 def _hyperband(client, model, params, X, y, max_iter=None, eta=None,
                dry_run=False, fit_params={}, random_state=42):
+    rng = check_random_state(random_state)
     N, R, brackets = _get_nr(max_iter, eta=eta)
     params = iter(ParameterSampler(params, n_iter=sum(N),
                                    random_state=random_state))
     model_futures = {_model_id(s, n_i):
-                     client.submit(_create_model, model, next(params))
+                     client.submit(_create_model, model, next(params),
+                                   random_state=random_state)
                      for s, n, r in zip(brackets, N, R) for n_i in range(n)}
 
     r = train_test_split(X, y, test_size=0.15, random_state=random_state)
@@ -108,7 +112,6 @@ def _hyperband(client, model, params, X, y, max_iter=None, eta=None,
                 for n_i in range(n)]
             for s, n, r in zip(brackets, N, R)}
 
-    rng = check_random_state(random_state)
     idx = {(i, j): rng.choice(len(X_train))
            for i, metas in enumerate(info.values())
            for j, meta in enumerate(metas)}
@@ -204,7 +207,8 @@ class HyperbandCV(DaskBaseSearchCV):
 
     def info(self, history=None):
         if history is None:
-            X, y = make_classification(n_samples=10, n_features=4, chunks=10)
+            X, y = make_classification(n_samples=10, n_features=4, chunks=10,
+                                       random_state=self.random_state)
             history, _ = _hyperband(self.client, self.model, self.params, X, y,
                                     max_iter=self.max_iter,
                                     dry_run=True, eta=self.eta,

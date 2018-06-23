@@ -29,7 +29,7 @@ def test_top_k():
 
 @pytest.mark.parametrize("array_type", ["numpy", "dask.array"])
 @pytest.mark.parametrize("library", ["dask-ml", "sklearn"])
-def test_sklearn(array_type, library, loop, max_iter=9):
+def test_sklearn(array_type, library, loop, max_iter=27):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
             chunk_size = 20
@@ -54,19 +54,21 @@ def test_sklearn(array_type, library, loop, max_iter=9):
             search.fit(X, y, classes=da.unique(y))
 
             models = [v[0] for v in search._models_and_meta.values()]
-            assert all(hasattr(model, "t_") for model in models)
+            trained = [hasattr(model, "t_") for model in models]
+            print("__58", sum(trained) / len(trained), sum(trained), len(trained))
+            assert all(trained)
 
-            # Test fraction of 0.15 is hardcoded into _hyperband
             def _iters(model):
                 t_ = (model.estimator.t_ if hasattr(model, 'estimator')
                       else model.t_)
+                # Test fraction of 0.15 is hardcoded into _hyperband
                 return (t_ - 1) / (chunk_size * (1 - 0.15))
             iters = {_iters(model) for model in models}
             assert len(iters) > 1
             assert 1 <= min(iters) < max(iters) <= max_iter
 
 
-@pytest.mark.parametrize("max_iter", [3, 9, 27])
+@pytest.mark.parametrize("max_iter", [3, 9])
 def test_info(max_iter, loop):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
