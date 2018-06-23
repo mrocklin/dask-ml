@@ -86,8 +86,9 @@ def _model_id(s, n_i):
     return "bracket={s}-{n_i}".format(s=s, n_i=n_i)
 
 
-def _hyperband(client, model, params, X, y, max_iter=None, eta=None,
+def _hyperband(model, params, X, y, max_iter=None, eta=None,
                dry_run=False, fit_params={}, random_state=42):
+    client = default_client()
     rng = check_random_state(random_state)
     N, R, brackets = _get_nr(max_iter, eta=eta)
     params = iter(ParameterSampler(params, n_iter=sum(N),
@@ -162,7 +163,6 @@ class HyperbandCV(DaskBaseSearchCV):
                  scoring=None, iid=True, cv=2, cache_cv=False, **kwargs):
         self.model = model
         self.params = params
-        self.client = default_client()
         self.max_iter = max_iter
         self.eta = eta
         self.random_state = random_state
@@ -190,7 +190,7 @@ class HyperbandCV(DaskBaseSearchCV):
             X = da.from_array(X, chunks=X.shape)
         if isinstance(y, np.ndarray):
             y = da.from_array(y, chunks=y.shape)
-        r = _hyperband(self.client, self.model, self.params, X, y,
+        r = _hyperband(self.model, self.params, X, y,
                        max_iter=self.max_iter,
                        fit_params=fit_params, eta=self.eta,
                        random_state=self.random_state)
@@ -203,13 +203,13 @@ class HyperbandCV(DaskBaseSearchCV):
 
     @property
     def _models_and_meta(self):
-        return self.client.gather(self._model_futures)
+        return default_client().gather(self._model_futures)
 
     def info(self, history=None):
         if history is None:
             X, y = make_classification(n_samples=10, n_features=4, chunks=10,
                                        random_state=self.random_state)
-            history, _ = _hyperband(self.client, self.model, self.params, X, y,
+            history, _ = _hyperband(self.model, self.params, X, y,
                                     max_iter=self.max_iter,
                                     dry_run=True, eta=self.eta,
                                     random_state=self.random_state)
