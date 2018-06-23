@@ -6,7 +6,7 @@ import math
 from sklearn.linear_model import SGDClassifier
 
 from distributed import Client
-from distributed.utils_test import loop, cluster
+from distributed.utils_test import loop, cluster, gen_cluster
 import dask.array as da
 
 from dask_ml.datasets import make_classification
@@ -66,6 +66,38 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             iters = {_iters(model) for model in models}
             assert len(iters) > 1
             assert 1 <= min(iters) < max(iters) <= max_iter
+
+
+@gen_cluster(client=True)
+async def test_sklearn_async(c, s, a, b):
+    chunk_size = 20
+    X, y = make_classification(n_samples=100, n_features=20,
+                               random_state=42, chunks=chunk_size)
+
+    kwargs = dict(tol=1e-3, penalty='elasticnet', random_state=42)
+
+    model = SGDClassifier(**kwargs)
+
+    params = {'alpha': np.logspace(-2, 1, num=1000),
+              'l1_ratio': np.linspace(0, 1, num=1000),
+              'average': [True, False]}
+    search = HyperbandCV(model, params, max_iter=27,
+                         random_state=42)
+    await search._fit(X, y, classes=da.unique(y))
+
+    models = [v[0] for v in (await search._models_and_meta).values()]
+    trained = [hasattr(model, "t_") for model in models]
+    print("__58", sum(trained) / len(trained), sum(trained), len(trained))
+    assert all(trained)
+
+    def _iters(model):
+        t_ = (model.estimator.t_ if hasattr(model, 'estimator')
+              else model.t_)
+        # Test fraction of 0.15 is hardcoded into _hyperband
+        return (t_ - 1) / (chunk_size * (1 - 0.15))
+    iters = {_iters(model) for model in models}
+    assert len(iters) > 1
+    assert 1 <= min(iters) < max(iters) <= max_iter
 
 
 @pytest.mark.parametrize("max_iter", [3, 9])

@@ -4,11 +4,13 @@ from sklearn.base import clone
 from sklearn.model_selection import ParameterSampler
 from sklearn.utils import check_random_state
 
+from tornado import gen
 from toolz import groupby
-from distributed import as_completed, default_client
+from dask.distributed import as_completed, default_client, futures_of
 from dask_searchcv.model_selection import DaskBaseSearchCV
 import dask.array as da
 from ..datasets import make_classification
+from ..wrappers import Incremental
 from ._split import train_test_split
 
 
@@ -22,17 +24,16 @@ def _get_nr(R, eta=3):
     return list(map(int, N)), list(map(int, R)), brackets
 
 
-def _partial_fit(model_and_meta, x, y, meta=None, fit_params={},
+def _partial_fit(model_and_meta, X, y, meta=None, fit_params={},
                  dry_run=False, **kwargs):
-    assert len(x) == 1
-    x = x[0].compute()
-    y = y.compute()
+    assert isinstance(X, np.ndarray)
+    assert y is None or isinstance(y, np.ndarray)
     model, m = model_and_meta
     if meta is None:
         meta = m
     while meta['iterations'] < meta['partial_fit_calls']:
         if not dry_run:
-            model.partial_fit(x, y, **fit_params)
+            model.partial_fit(X, y, **fit_params)
         meta["iterations"] += 1
     return model, meta
 
@@ -86,25 +87,37 @@ def _model_id(s, n_i):
     return "bracket={s}-{n_i}".format(s=s, n_i=n_i)
 
 
-def _hyperband(model, params, X, y, max_iter=None, eta=None,
-               dry_run=False, fit_params={}, random_state=42):
+async def _hyperband(model, params, X, y, max_iter=None, eta=None,
+                     dry_run=False, fit_params={}, random_state=42):
     client = default_client()
     rng = check_random_state(random_state)
     N, R, brackets = _get_nr(max_iter, eta=eta)
     params = iter(ParameterSampler(params, n_iter=sum(N),
                                    random_state=random_state))
+    if isinstance(model, Incremental):  # this should probably be handled elsewhere
+        model = model.estimator
     model_futures = {_model_id(s, n_i):
                      client.submit(_create_model, model, next(params),
                                    random_state=random_state)
                      for s, n, r in zip(brackets, N, R) for n_i in range(n)}
 
+    # lets assume everything in fit_params is small and make it concrete
+    fit_params = await client.compute(fit_params)
+
     r = train_test_split(X, y, test_size=0.15, random_state=random_state)
     X_train, X_test, y_train, y_test = r
     if isinstance(X, da.Array):
-        X_train = X_train.to_delayed()
+        X_train = futures_of(X_train.persist())
+        # X_test = futures_of(X_test.persist())  # if we should operate in chunks
+        X_test = client.compute(X_test)  # if we should pass a single chunk
+    else:
+        X_train, X_test = await client.scatter([X_train, X_test])
     if isinstance(y, da.Array):
-        y_train = y_train.to_delayed()
-    X_test, y_test = client.scatter([X_test, y_test])
+        y_train = futures_of(y_train.persist())
+        # y_test = futures_of(y_test.persist())  # if we should operate in chunks
+        y_test = client.compute(y_test)  # if we should pass a single chunk
+    else:
+        y_train, y_test = await client.scatter([y_train, y_test])
 
     info = {s: [{"partial_fit_calls": r, "bracket": _bracket_name(s),
                  "num_models": n, 'bracket_iter': 0,
@@ -116,16 +129,18 @@ def _hyperband(model, params, X, y, max_iter=None, eta=None,
     idx = {(i, j): rng.choice(len(X_train))
            for i, metas in enumerate(info.values())
            for j, meta in enumerate(metas)}
-    kwargs = {'dry_run': dry_run, 'fit_params': fit_params}
+
     model_meta_futures = {meta["model_id"]:
                           client.submit(_partial_fit,
                                         model_futures[meta["model_id"]],
                                         X_train[idx[(i, j)]],
                                         y_train[idx[(i, j)]],
                                         meta=meta, id=meta['model_id'],
-                                        **kwargs)
+                                        dry_run=dry_run,
+                                        fit_params=fit_params)
                           for i, bracket_metas in enumerate(info.values())
                           for j, meta in enumerate(bracket_metas)}
+
     assert set(model_meta_futures.keys()) == set(model_futures.keys())
 
     score_futures = [client.submit(_score, model_meta_future, X_test, y_test,
@@ -134,8 +149,8 @@ def _hyperband(model, params, X, y, max_iter=None, eta=None,
 
     completed_jobs = {}
     seq = as_completed(score_futures)
-    for future in seq:
-        result = future.result()
+    async for future in seq:
+        result = await future
 
         completed_jobs[result['model_id']] = result
         jobs = _to_promote(result, completed_jobs.values(), eta=eta)
@@ -143,7 +158,8 @@ def _hyperband(model, params, X, y, max_iter=None, eta=None,
             # This block prevents communication of the model
             i = rng.choice(len(X_train))
             model_future = model_futures[job["model_id"]]
-            model_future = client.submit(_partial_fit, model_future,
+            model_future = client.submit(_partial_fit,
+                                         model_future,
                                          X_train[i],
                                          y_train[i],
                                          meta=job, dry_run=dry_run,
@@ -186,14 +202,18 @@ class HyperbandCV(DaskBaseSearchCV):
                                           cache_cv=cache_cv, **kwargs)
 
     def fit(self, X, y, **fit_params):
+        return default_client().sync(self._fit, X, y, **fit_params)
+
+    @gen.coroutine
+    def _fit(self, X, y, **fit_params):
         if isinstance(X, np.ndarray):
             X = da.from_array(X, chunks=X.shape)
         if isinstance(y, np.ndarray):
             y = da.from_array(y, chunks=y.shape)
-        r = _hyperband(self.model, self.params, X, y,
-                       max_iter=self.max_iter,
-                       fit_params=fit_params, eta=self.eta,
-                       random_state=self.random_state)
+        r = yield _hyperband(self.model, self.params, X, y,
+                             max_iter=self.max_iter,
+                             fit_params=fit_params, eta=self.eta,
+                             random_state=self.random_state)
         history, model_futures = r
         self.history_ = history
         self._model_futures = model_futures
