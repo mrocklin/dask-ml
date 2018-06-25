@@ -28,7 +28,8 @@ def test_top_k():
 
 
 @pytest.mark.parametrize("array_type,library", [("dask.array", "dask-ml"),
-                                                ("numpy", "sklearn")])
+                                                ("numpy", "sklearn"),
+                                                ("numpy", "test")])
 def test_sklearn(array_type, library, loop, max_iter=27):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
@@ -41,16 +42,19 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                 chunk_size = X.shape[0]
 
             kwargs = dict(tol=1e-3, penalty='elasticnet', random_state=42)
-            if library == "sklearn":
-                model = SGDClassifier(**kwargs)
-            elif library == "dask-ml":
-                model = Incremental(SGDClassifier(), **kwargs)
+            models = {'sklearn': SGDClassifier(**kwargs),
+                      'dask-ml': Incremental(SGDClassifier(), **kwargs),
+                      'test': ConstantFunction()}
+            sgd_params = {'alpha': np.logspace(-2, 1, num=1000),
+                          'l1_ratio': np.linspace(0, 1, num=1000),
+                          'average': [True, False]}
+            all_params = {'sklearn': sgd_params, 'dask-ml': sgd_params,
+                          'test': {'value': np.linspace(0, 1)}}
+            model = models[library]
+            params = all_params[library]
 
-            params = {'alpha': np.logspace(-2, 1, num=1000),
-                      'l1_ratio': np.linspace(0, 1, num=1000),
-                      'average': [True, False]}
             search = HyperbandCV(model, params, max_iter=max_iter,
-                                 random_state=42)
+                                 random_state=42, asynchronous=False)
             search.fit(X, y, classes=da.unique(y))
 
             models = {k: v[0] for k, v in search._models_and_meta.items()}
@@ -63,8 +67,7 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                 # Test fraction of 0.15 is hardcoded into _hyperband
                 return (t_ - 1) / (chunk_size * (1 - 0.15))
             iters = {_iters(model) for model in models.values()}
-            assert len(iters) > 1
-            assert 1 <= min(iters) < max(iters) <= max_iter
+            assert iters == {1.0, 3.0, 9.0, 11.0, 27.0}
 
             info_plain = search.info()
             info_train = search.info(history=search.history_)
@@ -86,7 +89,7 @@ async def test_sklearn_async(c, s, a, b):
               'l1_ratio': np.linspace(0, 1, num=1000),
               'average': [True, False]}
     search = HyperbandCV(model, params, max_iter=max_iter,
-                         random_state=42)
+                         random_state=42, asynchronous=False)
     await search._fit(X, y, classes=da.unique(y))
 
     models = [v[0] for v in (await search._models_and_meta).values()]
@@ -110,7 +113,8 @@ def test_info(loop, max_iter):
         with Client(s['address'], loop=loop) as c:
             model = ConstantFunction()
             params = {'value': stats.uniform(0, 1)}
-            alg = HyperbandCV(model, params, max_iter=max_iter, random_state=0)
+            alg = HyperbandCV(model, params, max_iter=max_iter, random_state=0,
+                              asynchronous=False)
             info = alg.info()
             paper_alg_info = _hyperband_paper_alg(max_iter)
             saved = {81: {'bracket=4': 243, 'bracket=3': 222, 'bracket=2': 225,

@@ -60,23 +60,25 @@ def _top_k(results, k=1, sort="score"):
     return res
 
 
-def _to_promote(result, completed_jobs, eta=None):
+def _to_promote(result, completed_jobs, eta=None, asynchronous=None):
     bracket_models = [r for r in completed_jobs
                       if r['bracket_iter'] == result['bracket_iter'] and
                       r['bracket'] == result['bracket']]
 
-    bracket_completed = len(bracket_models) == result['num_models']
-    if bracket_completed:
-        to_keep = len(bracket_models) // eta
-        if to_keep <= 1:
-            return []
-        top_results = _top_k(bracket_models, k=to_keep, sort="score")
-        for job in top_results:
-            job["num_models"] = to_keep
-            job['partial_fit_calls'] *= eta
-            job['bracket_iter'] += 1
-        return top_results
-    return []
+    if not asynchronous:
+        bracket_completed = len(bracket_models) == result['num_models']
+        if bracket_completed:
+            to_keep = len(bracket_models) // eta
+            if to_keep <= 1:
+                return []
+            top_results = _top_k(bracket_models, k=to_keep, sort="score")
+            for job in top_results:
+                job["num_models"] = to_keep
+                job['partial_fit_calls'] *= eta
+                job['bracket_iter'] += 1
+            return top_results
+        return []
+    raise ValueError
 
 
 def _create_model(model, params, random_state=42):
@@ -96,7 +98,8 @@ def _model_id(s, n_i):
 
 
 async def _hyperband(model, params, X, y, max_iter=None, eta=None,
-                     dry_run=False, fit_params={}, random_state=42):
+                     dry_run=False, fit_params={}, random_state=42,
+                     asynchronous=None):
     client = default_client()
     rng = check_random_state(random_state)
     N, R, brackets = _get_nr(max_iter, eta=eta)
@@ -162,7 +165,8 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
         assert result['iterations'] > 0
 
         completed_jobs[result['model_id']] = result
-        jobs = _to_promote(result, completed_jobs.values(), eta=eta)
+        jobs = _to_promote(result, completed_jobs.values(), eta=eta,
+                           asynchronous=asynchronous)
         for job in jobs:
             assert job['iterations'] > 0
             i = rng.choice(len(X_train))
@@ -185,14 +189,20 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
 
 
 class HyperbandCV(DaskBaseSearchCV):
-    def __init__(self, model, params, max_iter=81, eta=3, random_state=42,
-                 scoring=None, iid=True, cv=2, cache_cv=False, **kwargs):
+    def __init__(self, model, params, max_iter=81, eta=3, asynchronous=None,
+                 random_state=42, scoring=None, iid=True, cv=2, cache_cv=False,
+                 **kwargs):
         self.model = model
         self.params = params
         self.max_iter = max_iter
         self.eta = eta
         self.random_state = random_state
         self.scoring = scoring
+        if asynchronous is None:
+            asynchronous = False
+        self.asynchronous = asynchronous
+
+
         if not iid:
             raise ValueError('Please specify iid=True. Hyperband assumes that '
                              'each observation is independent and '
@@ -222,6 +232,7 @@ class HyperbandCV(DaskBaseSearchCV):
             y = da.from_array(y, chunks=y.shape)
         r = yield _hyperband(self.model, self.params, X, y,
                              max_iter=self.max_iter,
+                             asynchronous=self.asynchronous,
                              fit_params=fit_params, eta=self.eta,
                              random_state=self.random_state)
         history, model_futures = r
@@ -247,6 +258,7 @@ class HyperbandCV(DaskBaseSearchCV):
                                        random_state=self.random_state)
             r = yield _hyperband(self.model, self.params, X, y,
                                  max_iter=self.max_iter,
+                                 asynchronous=self.asynchronous,
                                  dry_run=True, eta=self.eta,
                                  random_state=self.random_state)
             history, _ = r

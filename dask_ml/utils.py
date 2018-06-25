@@ -251,8 +251,11 @@ class ConstantFunction(BaseEstimator):
     def _fn(self):
         return self.value
 
-    def partial_fit(self, *args, **kwargs):
+    def partial_fit(self, X, y=None, **kwargs):
         self._partial_fit_called = True
+        if not hasattr(self, 't_'):
+            self.t_ = 1
+        self.t_ += X.shape[0]
         return self
 
     def score(self, *args, **kwargs):
