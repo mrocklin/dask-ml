@@ -67,11 +67,12 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                 # Test fraction of 0.15 is hardcoded into _hyperband
                 return (t_ - 1) / (chunk_size * (1 - 0.15))
             iters = {_iters(model) for model in models.values()}
-            assert iters == {1.0, 3.0, 9.0, 11.0, 27.0}
 
             info_plain = search.info()
             info_train = search.info(history=search.history_)
+            assert info_plain['brackets'] == info_train['brackets']
             assert info_train == info_plain
+            assert 1 <= min(iters) < max(iters) <= max_iter
 
 
 @gen_cluster(client=True)
