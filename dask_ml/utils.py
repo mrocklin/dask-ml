@@ -245,12 +245,14 @@ def _format_bytes(n):
 class ConstantFunction(BaseEstimator):
     def __init__(self, value=0, **kwargs):
         self.value = value
+        self._partial_fit_called = False
         super(BaseEstimator, self).__init__(**kwargs)
 
     def _fn(self):
         return self.value
 
     def partial_fit(self, *args, **kwargs):
+        self._partial_fit_called = True
         return self
 
     def score(self, *args, **kwargs):

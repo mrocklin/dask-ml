@@ -41,7 +41,8 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={},
 def _score(model_and_meta, x, y, dry_run=False):
     model, meta = model_and_meta
     if dry_run:
-        score = 0
+        score = np.random.rand()
+        #  score = 0
     else:
         # TODO: change this to dask_ml.get_scorer
         score = model.score(x, y)
@@ -50,7 +51,9 @@ def _score(model_and_meta, x, y, dry_run=False):
 
 
 def _top_k(results, k=1, sort="score"):
-    return sorted(results, key=lambda x: x[sort])[-k:]
+    res = sorted(results, key=lambda x: x[sort])[-k:]
+    assert len(res) == k
+    return res
 
 
 def _to_promote(result, completed_jobs, eta=None):
@@ -154,22 +157,26 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
 
         completed_jobs[result['model_id']] = result
         jobs = _to_promote(result, completed_jobs.values(), eta=eta)
-        for job in jobs:
-            # This block prevents communication of the model
+        for job_i, job in enumerate(jobs):
+            #  if job_i == 0:
+                #  import pdb; pdb.set_trace()
             i = rng.choice(len(X_train))
+
+            # This block prevents communication of the model
             model_future = model_futures[job["model_id"]]
-            model_future = client.submit(_partial_fit,
-                                         model_future,
-                                         X_train[i],
-                                         y_train[i],
+            model = model_future.result()
+            model_future = client.submit(_partial_fit, model_future,
+                                         X_train[i], y_train[i],
                                          meta=job, dry_run=dry_run,
                                          id=job['model_id'],
                                          fit_params=fit_params)
+            model_futures[job["model_id"]] = model_future
 
             score_future = client.submit(_score, model_future, X_test, y_test,
                                          dry_run=dry_run)
-            model_futures[job["model_id"]] = model_future
             seq.add(score_future)
+    assert all([future.done() for future in seq])
+    assert completed_jobs.keys() == model_futures.keys()
 
     return list(completed_jobs.values()), model_futures
 
@@ -226,13 +233,20 @@ class HyperbandCV(DaskBaseSearchCV):
         return default_client().gather(self._model_futures)
 
     def info(self, history=None):
+        res = default_client().sync(self._info, history=history)
+        assert isinstance(res, dict)
+        return res
+
+    @gen.coroutine
+    def _info(self, history=None):
         if history is None:
             X, y = make_classification(n_samples=10, n_features=4, chunks=10,
                                        random_state=self.random_state)
-            history, _ = _hyperband(self.model, self.params, X, y,
-                                    max_iter=self.max_iter,
-                                    dry_run=True, eta=self.eta,
-                                    random_state=self.random_state)
+            r = yield _hyperband(self.model, self.params, X, y,
+                                 max_iter=self.max_iter,
+                                 dry_run=True, eta=self.eta,
+                                 random_state=self.random_state)
+            history, _ = r
 
         brackets = groupby("bracket", history)
         keys = sorted(brackets.keys())
@@ -247,4 +261,5 @@ class HyperbandCV(DaskBaseSearchCV):
                 'total_models': len(set([r['model_id'] for r in history]))}
         res = {'brackets': bracket_info}
         res.update(**info)
+        assert isinstance(res, dict)
         return res
