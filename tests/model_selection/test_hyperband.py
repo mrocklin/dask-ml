@@ -27,15 +27,14 @@ def test_top_k():
                    {'score': 4, 'model': '4'}]
 
 
-@pytest.mark.parametrize("array_type", ["numpy", "dask.array"])
-@pytest.mark.parametrize("library", ["dask-ml", "sklearn"])
+@pytest.mark.parametrize("array_type,library", [("dask.array", "dask-ml"),
+                                                ("numpy", "sklearn")])
 def test_sklearn(array_type, library, loop, max_iter=27):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
-            chunk_size = 50
-            X, y = make_classification(n_samples=100, n_features=20,
+            chunk_size = 100  # make dask array with one chunk
+            X, y = make_classification(n_samples=chunk_size, n_features=20,
                                        random_state=42, chunks=chunk_size)
-            print(X.chunks, y.chunks)
             if array_type == "numpy":
                 X = X.compute()
                 y = y.compute()
@@ -54,9 +53,8 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                                  random_state=42)
             search.fit(X, y, classes=da.unique(y))
 
-            models = [v[0] for v in search._models_and_meta.values()]
-            trained = [hasattr(model, "t_") for model in models]
-            print("__58", sum(trained) / len(trained), sum(trained), len(trained))
+            models = {k: v[0] for k, v in search._models_and_meta.items()}
+            trained = [hasattr(model, "t_") for model in models.values()]
             assert all(trained)
 
             def _iters(model):
@@ -64,9 +62,13 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                       else model.t_)
                 # Test fraction of 0.15 is hardcoded into _hyperband
                 return (t_ - 1) / (chunk_size * (1 - 0.15))
-            iters = {_iters(model) for model in models}
+            iters = {_iters(model) for model in models.values()}
             assert len(iters) > 1
             assert 1 <= min(iters) < max(iters) <= max_iter
+
+            info_plain = search.info()
+            info_train = search.info(history=search.history_)
+            assert info_train == info_plain
 
 
 @gen_cluster(client=True)

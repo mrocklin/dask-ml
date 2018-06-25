@@ -24,11 +24,11 @@ def _get_nr(R, eta=3):
     return list(map(int, N)), list(map(int, R)), brackets
 
 
-def _partial_fit(model_and_meta, X, y, meta=None, fit_params={},
+def _partial_fit(model_meta_future, X, y, meta=None, fit_params={},
                  dry_run=False, **kwargs):
     assert isinstance(X, np.ndarray)
     assert y is None or isinstance(y, np.ndarray)
-    model, m = model_and_meta
+    model, m = model_meta_future
     if meta is None:
         meta = m
     while meta['iterations'] < meta['partial_fit_calls']:
@@ -40,13 +40,17 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={},
 
 def _score(model_and_meta, x, y, dry_run=False):
     model, meta = model_and_meta
+    #  seed = hash(((k, v) for k, v in meta.items())) % 2**32
+    #  rng = np.random.RandomState(seed)
     if dry_run:
-        score = np.random.rand()
-        #  score = 0
+        #  score = rng.rand()
+        score = 0
     else:
         # TODO: change this to dask_ml.get_scorer
-        score = model.score(x, y)
+        #  score = model.score(x, y)
+        score = 0
     meta.update(score=score)
+    assert meta['iterations'] > 0
     return meta
 
 
@@ -79,7 +83,8 @@ def _create_model(model, params, random_state=42):
     model = clone(model).set_params(**params)
     if 'random_state' in model.get_params():
         model.set_params(random_state=random_state)
-    return model, {'iterations': 0}
+    #  meta = {}  # right now no meta information
+    return model, None
 
 
 def _bracket_name(s):
@@ -140,45 +145,43 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
                                         y_train[idx[(i, j)]],
                                         meta=meta, id=meta['model_id'],
                                         dry_run=dry_run,
-                                        fit_params=fit_params)
+                                        fit_params=fit_params, pure=False)
                           for i, bracket_metas in enumerate(info.values())
                           for j, meta in enumerate(bracket_metas)}
 
     assert set(model_meta_futures.keys()) == set(model_futures.keys())
 
     score_futures = [client.submit(_score, model_meta_future, X_test, y_test,
-                                   dry_run=dry_run)
+                                   dry_run=dry_run, pure=False)
                      for _id, model_meta_future in model_meta_futures.items()]
 
     completed_jobs = {}
     seq = as_completed(score_futures)
     async for future in seq:
         result = await future
+        assert result['iterations'] > 0
 
         completed_jobs[result['model_id']] = result
         jobs = _to_promote(result, completed_jobs.values(), eta=eta)
-        for job_i, job in enumerate(jobs):
-            #  if job_i == 0:
-                #  import pdb; pdb.set_trace()
+        for job in jobs:
+            assert job['iterations'] > 0
             i = rng.choice(len(X_train))
 
             # This block prevents communication of the model
-            model_future = model_futures[job["model_id"]]
-            model = model_future.result()
-            model_future = client.submit(_partial_fit, model_future,
-                                         X_train[i], y_train[i],
-                                         meta=job, dry_run=dry_run,
-                                         id=job['model_id'],
-                                         fit_params=fit_params)
-            model_futures[job["model_id"]] = model_future
+            model_meta_future = model_meta_futures[job["model_id"]]
+            model_meta_future = client.submit(_partial_fit, model_meta_future,
+                                              X_train[i], y_train[i],
+                                              meta=job, dry_run=dry_run,
+                                              id=job['model_id'],
+                                              fit_params=fit_params)
+            model_meta_futures[job["model_id"]] = model_meta_future
 
-            score_future = client.submit(_score, model_future, X_test, y_test,
-                                         dry_run=dry_run)
+            score_future = client.submit(_score, model_meta_future, X_test,
+                                         y_test, dry_run=dry_run)
             seq.add(score_future)
-    assert all([future.done() for future in seq])
-    assert completed_jobs.keys() == model_futures.keys()
 
-    return list(completed_jobs.values()), model_futures
+    assert completed_jobs.keys() == model_meta_futures.keys()
+    return list(completed_jobs.values()), model_meta_futures
 
 
 class HyperbandCV(DaskBaseSearchCV):
