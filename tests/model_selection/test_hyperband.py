@@ -14,6 +14,7 @@ from dask_ml.model_selection import HyperbandCV
 from dask_ml.wrappers import Incremental
 from dask_ml.model_selection._hyperband import _top_k
 from dask_ml.utils import ConstantFunction
+import itertools
 
 
 def test_top_k():
@@ -23,8 +24,8 @@ def test_top_k():
            {'score': 3, 'model': '3'},
            {'score': 4, 'model': '4'}]
     out = _top_k(in_, k=2, sort="score")
-    assert out == [{'score': 3, 'model': '3'},
-                   {'score': 4, 'model': '4'}]
+    assert out == [{'score': 4, 'model': '4'},
+                   {'score': 3, 'model': '3'}]
 
 
 @pytest.mark.parametrize("array_type,library", [("dask.array", "dask-ml"),
@@ -155,7 +156,8 @@ def test_integration(loop):
                                    'std_fit_time', 'std_score_time',
                                    'mean_test_score', 'std_test_score',
                                    'partial_fit_calls', 'mean_train_score',
-                                   'std_train_score', 'params', 'param_value'}
+                                   'std_train_score', 'params', 'param_value',
+                                   'mean_copy_time'}
             for column, dtype in [('rank_test_score', int),
                                   ('model_id', str),
                                   ('mean_score_time', float),
@@ -163,7 +165,8 @@ def test_integration(loop):
                                   ('mean_fit_time', float),
                                   ('partial_fit_calls', int),
                                   ('params', dict),
-                                  ('param_value', float)]:
+                                  ('param_value', float),
+                                  ('mean_copy_time', float)]:
                 assert all(isinstance(v, dtype)
                            for v in alg.cv_results_[column])
             alg.best_estimator_.fit(X, y)
@@ -171,6 +174,38 @@ def test_integration(loop):
             assert isinstance(alg.best_score_, float)
             assert isinstance(alg.best_estimator_, ConstantFunction)
             assert isinstance(alg.best_params_, dict)
+
+
+def test_copy(loop):
+    """
+    Make sure models are not changed in place, and have the same parameters
+    each time
+    """
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop) as c:
+            rng = np.random.RandomState(42)
+            n, d = 100, 1
+            X = (np.arange(n * d) // d).reshape(n, d)
+            y = np.sign(rng.randn(n))
+            X = da.from_array(X, (2, d))
+            y = da.from_array(y, 2)
+
+            model = ConstantFunction()
+            params = {'value': np.logspace(-2, 1, num=1000)}
+
+            max_iter = 27
+            alg = HyperbandCV(model, params, max_iter=max_iter,
+                              random_state=42)
+            alg.fit(X, y, classes=da.unique(y))
+
+            all_models = alg._all_models
+
+    copied_models = list(filter(lambda x: len(x) > 1,
+                              all_models.values()))
+    assert len(copied_models) > 1
+    for models in copied_models:
+        assert all(not np.allclose(m1.coef_, m2.coef_)
+                   for m1, m2 in itertools.combinations(models, 2))
 
 
 def _hyperband_paper_alg(R, eta=3):

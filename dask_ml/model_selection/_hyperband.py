@@ -13,7 +13,8 @@ import dask.array as da
 from ..datasets import make_classification
 from ..wrappers import Incremental
 from ._split import train_test_split
-from time import time
+from distributed.metrics import time
+from copy import deepcopy
 
 
 def _get_nr(R, eta=3):
@@ -26,14 +27,17 @@ def _get_nr(R, eta=3):
     return list(map(int, N)), list(map(int, R)), brackets
 
 
-def _partial_fit(model_meta_future, X, y, meta=None, fit_params={},
+def _partial_fit(model_and_meta, X, y, meta=None, fit_params={},
                  dry_run=False, **kwargs):
     start = time()
     assert isinstance(X, np.ndarray)
     assert y is None or isinstance(y, np.ndarray)
-    model, m = model_meta_future
+    model = deepcopy(model_and_meta[0])
     if meta is None:
-        meta = m
+        meta = deepcopy(model_and_meta[1])
+    else:
+        meta = deepcopy(meta)
+    meta['mean_copy_time'] += time() - start
     while meta['iterations'] < meta['partial_fit_calls']:
         if not dry_run:
             model.partial_fit(X, y, **fit_params)
@@ -44,12 +48,15 @@ def _partial_fit(model_meta_future, X, y, meta=None, fit_params={},
 
 def _score(model_and_meta, x, y, dry_run=False):
     start = time()
-    model, meta = model_and_meta
-    #  seed = hash(((k, v) for k, v in meta.items())) % 2**32
-    #  rng = np.random.RandomState(seed)
+    model = deepcopy(model_and_meta[0])
+    meta = deepcopy(model_and_meta[1])
+    meta['mean_copy_time'] += time() - start
     if dry_run:
-        #  score = rng.rand()
         score = 0
+        #  BUG: uncommenting these lines gives a bug in test_info for R=27, 81
+        #  seed = hash(((k, v) for k, v in meta.items())) % 2**32
+        #  rng = np.random.RandomState(seed)
+        #  score = rng.rand()
     else:
         # TODO: change this to dask_ml.get_scorer
         score = model.score(x, y)
@@ -61,9 +68,8 @@ def _score(model_and_meta, x, y, dry_run=False):
 
 
 def _top_k(results, k=1, sort="score"):
-    res = sorted(results, key=lambda x: x[sort])[-k:]
-    assert len(res) == k
-    return res
+    res = toolz.topk(k, results, key=sort)
+    return list(res)
 
 
 def _to_promote(result, completed_jobs, eta=None, asynchronous=None):
@@ -146,7 +152,7 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
                  'std_fit_time': 0, 'std_score_time': 0,
                  'mean_test_score': 0, 'std_test_score': 0,
                  'mean_train_score': None, 'std_train_score': None,
-                 "iterations": 0}
+                 "iterations": 0, 'mean_copy_time': 0}
                 for n_i in range(n)]
             for s, n, r in zip(brackets, N, R)}
 
@@ -173,9 +179,10 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
 
     completed_jobs = {}
     seq = as_completed(score_futures)
+    all_models = {k: [v]
+                        for k, v in deepcopy(model_meta_futures).items()}
     async for future in seq:
         result = await future
-        assert result['iterations'] > 0
 
         completed_jobs[result['model_id']] = result
         jobs = _to_promote(result, completed_jobs.values(), eta=eta,
@@ -185,26 +192,28 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
             i = rng.choice(len(X_train))
 
             # This block prevents communication of the model
-            model_meta_future = model_meta_futures[job["model_id"]]
+            model_id = job['model_id']
+            model_meta_future = model_meta_futures[model_id]
             model_meta_future = client.submit(_partial_fit, model_meta_future,
                                               X_train[i], y_train[i],
                                               meta=job, dry_run=dry_run,
-                                              id=job['model_id'],
+                                              id=model_id,
                                               fit_params=fit_params)
-            model_meta_futures[job["model_id"]] = model_meta_future
+            all_models[model_id] += [model_meta_future]
+            model_meta_futures[model_id] = model_meta_future
 
             score_future = client.submit(_score, model_meta_future, X_test,
                                          y_test, dry_run=dry_run)
             seq.add(score_future)
 
     assert completed_jobs.keys() == model_meta_futures.keys()
-    return list(completed_jobs.values()), params, model_meta_futures
+    return (list(completed_jobs.values()), params, model_meta_futures,
+            all_models)
 
 
 class HyperbandCV(DaskBaseSearchCV):
     def __init__(self, model, params, max_iter=81, eta=3, asynchronous=None,
-                 random_state=42, scoring=None, iid=True, cv=1, cache_cv=False,
-                 **kwargs):
+                 random_state=42, scoring=None):
         self.model = model
         self.params = params
         self.max_iter = max_iter
@@ -215,24 +224,7 @@ class HyperbandCV(DaskBaseSearchCV):
             asynchronous = False
         self.asynchronous = asynchronous
 
-
-        if not iid:
-            raise ValueError('Please specify iid=True. Hyperband assumes that '
-                             'each observation is independent and '
-                             'identitically distributed because it trains on '
-                             'each block of X and y')
-        if cv != 1:
-            raise ValueError('Please specify cv=1. Future work is to '
-                             'allow arbitrary cross-validation (and pull '
-                             'request welcome!).')
-        if cache_cv:
-            raise ValueError('Please specify cv_cache=False. We do not '
-                             'support caching intermediate results yet, '
-                             'but this is on the roadmap (and pull requests '
-                             'welcome!).')
-
-        super(HyperbandCV, self).__init__(model, iid=iid, cv=cv,
-                                          cache_cv=cache_cv, **kwargs)
+        super(HyperbandCV, self).__init__(model)
 
     def fit(self, X, y, **fit_params):
         return default_client().sync(self._fit, X, y, **fit_params)
@@ -248,10 +240,11 @@ class HyperbandCV(DaskBaseSearchCV):
                              asynchronous=self.asynchronous,
                              fit_params=fit_params, eta=self.eta,
                              random_state=self.random_state)
-        history, params, model_futures = r
+        history, params, model_futures, all_models = r
 
         self.history_ = history
         self._model_futures = model_futures
+        self.__all_models = all_models
 
         cv_res, best_idx = _get_cv_results(history, params)
         best_id = cv_res['model_id'][best_idx]
@@ -270,6 +263,12 @@ class HyperbandCV(DaskBaseSearchCV):
     def _models_and_meta(self):
         return default_client().gather(self._model_futures)
 
+    @property
+    def _all_models(self):
+        models_and_meta = default_client().gather(self.__all_models)
+        models = {k: [vi[0] for vi in v] for k, v in models_and_meta.items()}
+        return models
+
     def info(self, history=None):
         res = default_client().sync(self._info, history=history)
         assert isinstance(res, dict)
@@ -285,7 +284,7 @@ class HyperbandCV(DaskBaseSearchCV):
                                  asynchronous=self.asynchronous,
                                  dry_run=True, eta=self.eta,
                                  random_state=self.random_state)
-            history, _, _ = r
+            history, _, _, _ = r
 
         brackets = groupby("bracket", history)
         keys = sorted(brackets.keys())
