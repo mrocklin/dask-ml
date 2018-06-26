@@ -1,6 +1,7 @@
 from collections import Sequence
 from numbers import Integral
 from multiprocessing import cpu_count
+import time
 
 import pandas as pd
 import numpy as np
@@ -251,7 +252,8 @@ class ConstantFunction(BaseEstimator):
     def _fn(self):
         return self.value
 
-    def partial_fit(self, X, y=None, **kwargs):
+    def partial_fit(self, X, y=None, sleep=0, **kwargs):
+        time.sleep(sleep)
         self._partial_fit_called = True
         if not hasattr(self, 't_'):
             self.t_ = 1

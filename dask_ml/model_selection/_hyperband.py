@@ -14,6 +14,7 @@ from ..datasets import make_classification
 from ..wrappers import Incremental
 from ._split import train_test_split
 from distributed.metrics import time
+from distributed import Future
 from copy import deepcopy
 
 
@@ -134,14 +135,12 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
     X_train, X_test, y_train, y_test = r
     if isinstance(X, da.Array):
         X_train = futures_of(X_train.persist())
-        # X_test = futures_of(X_test.persist())  # if we should operate in chunks
-        X_test = client.compute(X_test)  # if we should pass a single chunk
+        X_test = client.compute(X_test)
     else:
         X_train, X_test = await client.scatter([X_train, X_test])
     if isinstance(y, da.Array):
         y_train = futures_of(y_train.persist())
-        # y_test = futures_of(y_test.persist())  # if we should operate in chunks
-        y_test = client.compute(y_test)  # if we should pass a single chunk
+        y_test = client.compute(y_test)
     else:
         y_train, y_test = await client.scatter([y_train, y_test])
 
@@ -181,8 +180,10 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
     seq = as_completed(score_futures)
     all_models = {k: [v]
                         for k, v in deepcopy(model_meta_futures).items()}
+    history = []
     async for future in seq:
         result = await future
+        history += [result]
 
         completed_jobs[result['model_id']] = result
         jobs = _to_promote(result, completed_jobs.values(), eta=eta,
@@ -207,8 +208,8 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
             seq.add(score_future)
 
     assert completed_jobs.keys() == model_meta_futures.keys()
-    return (list(completed_jobs.values()), params, model_meta_futures,
-            all_models)
+    return (params, model_meta_futures, history, all_models,
+            list(completed_jobs.values()))
 
 
 class HyperbandCV(DaskBaseSearchCV):
@@ -240,16 +241,17 @@ class HyperbandCV(DaskBaseSearchCV):
                              asynchronous=self.asynchronous,
                              fit_params=fit_params, eta=self.eta,
                              random_state=self.random_state)
-        history, params, model_futures, all_models = r
+        params, model_meta_futures, history, all_models, jobs = r
 
+        self.jobs_ = jobs
         self.history_ = history
-        self._model_futures = model_futures
+        self._model_meta_futures = model_meta_futures
         self.__all_models = all_models
 
-        cv_res, best_idx = _get_cv_results(history, params)
+        cv_res, best_idx = _get_cv_results(jobs, params)
         best_id = cv_res['model_id'][best_idx]
 
-        best_model_and_meta = yield model_futures[best_id]
+        best_model_and_meta = yield model_meta_futures[best_id]
         self.best_estimator_ = best_model_and_meta[0]
 
         self.cv_results_ = cv_res
@@ -261,7 +263,7 @@ class HyperbandCV(DaskBaseSearchCV):
 
     @property
     def _models_and_meta(self):
-        return default_client().gather(self._model_futures)
+        return default_client().gather(self._model_meta_futures)
 
     @property
     def _all_models(self):
@@ -269,14 +271,14 @@ class HyperbandCV(DaskBaseSearchCV):
         models = {k: [vi[0] for vi in v] for k, v in models_and_meta.items()}
         return models
 
-    def info(self, history=None):
-        res = default_client().sync(self._info, history=history)
+    def info(self, jobs=None):
+        res = default_client().sync(self._info, jobs=jobs)
         assert isinstance(res, dict)
         return res
 
     @gen.coroutine
-    def _info(self, history=None):
-        if history is None:
+    def _info(self, jobs=None):
+        if jobs is None:
             X, y = make_classification(n_samples=10, n_features=4, chunks=10,
                                        random_state=self.random_state)
             r = yield _hyperband(self.model, self.params, X, y,
@@ -284,9 +286,9 @@ class HyperbandCV(DaskBaseSearchCV):
                                  asynchronous=self.asynchronous,
                                  dry_run=True, eta=self.eta,
                                  random_state=self.random_state)
-            history, _, _, _ = r
+            _, _, _, _, jobs = r
 
-        brackets = groupby("bracket", history)
+        brackets = groupby("bracket", jobs)
         keys = sorted(brackets.keys())
         values = [brackets[k] for k in keys]
         bracket_info = [{'num_models': max(r['num_models'] for r in v),
@@ -295,8 +297,9 @@ class HyperbandCV(DaskBaseSearchCV):
                          'bracket': k}
                         for k, v in zip(keys, values)]
         info = {'total_partial_fit_calls': sum(r['partial_fit_calls']
-                                               for r in history),
-                'total_models': len(set([r['model_id'] for r in history]))}
+                                               for r in jobs),
+                'total_models': len(set([r['model_id']
+                                         for r in jobs]))}
         res = {'brackets': bracket_info}
         res.update(**info)
         assert isinstance(res, dict)

@@ -70,7 +70,7 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             iters = {_iters(model) for model in models.values()}
 
             info_plain = search.info()
-            info_train = search.info(history=search.history_)
+            info_train = search.info(jobs=search.jobs_)
             assert info_plain['brackets'] == info_train['brackets']
             assert info_train == info_plain
             assert 1 <= min(iters) < max(iters) <= max_iter
@@ -138,7 +138,7 @@ def test_info(loop, max_iter):
 
             X, y = make_classification(n_samples=10, n_features=4, chunks=10)
             alg.fit(X, y)
-            info_after_fit = alg.info(history=alg.history_)
+            info_after_fit = alg.info(jobs=alg.jobs_)
             assert info_after_fit == info
 
 
