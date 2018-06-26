@@ -141,6 +141,38 @@ def test_info(loop, max_iter):
             assert info_after_fit == info
 
 
+def test_integration(loop):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop) as c:
+            X, y = make_classification(n_samples=10, n_features=4, chunks=10)
+            model = ConstantFunction()
+            params = {'value': stats.uniform(0, 1)}
+            alg = HyperbandCV(model, params)
+            alg.fit(X, y)
+            cv_res_keys = set(alg.cv_results_.keys())
+            assert cv_res_keys == {'rank_test_score', "model_id",
+                                   'mean_fit_time', 'mean_score_time',
+                                   'std_fit_time', 'std_score_time',
+                                   'mean_test_score', 'std_test_score',
+                                   'partial_fit_calls', 'mean_train_score',
+                                   'std_train_score', 'params', 'param_value'}
+            for column, dtype in [('rank_test_score', int),
+                                  ('model_id', str),
+                                  ('mean_score_time', float),
+                                  ('mean_test_score', float),
+                                  ('mean_fit_time', float),
+                                  ('partial_fit_calls', int),
+                                  ('params', dict),
+                                  ('param_value', float)]:
+                assert all(isinstance(v, dtype)
+                           for v in alg.cv_results_[column])
+            alg.best_estimator_.fit(X, y)
+            assert isinstance(alg.best_index_, int)
+            assert isinstance(alg.best_score_, float)
+            assert isinstance(alg.best_estimator_, ConstantFunction)
+            assert isinstance(alg.best_params_, dict)
+
+
 def _hyperband_paper_alg(R, eta=3):
     """
     Algorithm 1 from the Hyperband paper. Only a slight modification is made,

@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import toolz
 from sklearn.base import clone
 from sklearn.model_selection import ParameterSampler
 from sklearn.utils import check_random_state
@@ -12,6 +13,7 @@ import dask.array as da
 from ..datasets import make_classification
 from ..wrappers import Incremental
 from ._split import train_test_split
+from time import time
 
 
 def _get_nr(R, eta=3):
@@ -26,6 +28,7 @@ def _get_nr(R, eta=3):
 
 def _partial_fit(model_meta_future, X, y, meta=None, fit_params={},
                  dry_run=False, **kwargs):
+    start = time()
     assert isinstance(X, np.ndarray)
     assert y is None or isinstance(y, np.ndarray)
     model, m = model_meta_future
@@ -35,10 +38,12 @@ def _partial_fit(model_meta_future, X, y, meta=None, fit_params={},
         if not dry_run:
             model.partial_fit(X, y, **fit_params)
         meta["iterations"] += 1
+    meta['mean_fit_time'] += time() - start
     return model, meta
 
 
 def _score(model_and_meta, x, y, dry_run=False):
+    start = time()
     model, meta = model_and_meta
     #  seed = hash(((k, v) for k, v in meta.items())) % 2**32
     #  rng = np.random.RandomState(seed)
@@ -47,10 +52,11 @@ def _score(model_and_meta, x, y, dry_run=False):
         score = 0
     else:
         # TODO: change this to dask_ml.get_scorer
-        #  score = model.score(x, y)
-        score = 0
+        score = model.score(x, y)
     meta.update(score=score)
     assert meta['iterations'] > 0
+    meta['mean_score_time'] += time() - start
+    meta['mean_test_score'] = score
     return meta
 
 
@@ -107,8 +113,11 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
                                    random_state=random_state))
     if isinstance(model, Incremental):  # this should probably be handled elsewhere
         model = model.estimator
+    params = {_model_id(s, n_i): next(params)
+              for s, n, r in zip(brackets, N, R) for n_i in range(n)}
     model_futures = {_model_id(s, n_i):
-                     client.submit(_create_model, model, next(params),
+                     client.submit(_create_model, model,
+                                   params[_model_id(s, n_i)],
                                    random_state=random_state)
                      for s, n, r in zip(brackets, N, R) for n_i in range(n)}
 
@@ -133,6 +142,10 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
     info = {s: [{"partial_fit_calls": r, "bracket": _bracket_name(s),
                  "num_models": n, 'bracket_iter': 0,
                  "model_id": _model_id(s, n_i),
+                 'mean_fit_time': 0, 'mean_score_time': 0,
+                 'std_fit_time': 0, 'std_score_time': 0,
+                 'mean_test_score': 0, 'std_test_score': 0,
+                 'mean_train_score': None, 'std_train_score': None,
                  "iterations": 0}
                 for n_i in range(n)]
             for s, n, r in zip(brackets, N, R)}
@@ -185,12 +198,12 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
             seq.add(score_future)
 
     assert completed_jobs.keys() == model_meta_futures.keys()
-    return list(completed_jobs.values()), model_meta_futures
+    return list(completed_jobs.values()), params, model_meta_futures
 
 
 class HyperbandCV(DaskBaseSearchCV):
     def __init__(self, model, params, max_iter=81, eta=3, asynchronous=None,
-                 random_state=42, scoring=None, iid=True, cv=2, cache_cv=False,
+                 random_state=42, scoring=None, iid=True, cv=1, cache_cv=False,
                  **kwargs):
         self.model = model
         self.params = params
@@ -208,8 +221,8 @@ class HyperbandCV(DaskBaseSearchCV):
                              'each observation is independent and '
                              'identitically distributed because it trains on '
                              'each block of X and y')
-        if cv != 2:
-            raise ValueError('Please specify cv=2. Future work is to '
+        if cv != 1:
+            raise ValueError('Please specify cv=1. Future work is to '
                              'allow arbitrary cross-validation (and pull '
                              'request welcome!).')
         if cache_cv:
@@ -235,11 +248,22 @@ class HyperbandCV(DaskBaseSearchCV):
                              asynchronous=self.asynchronous,
                              fit_params=fit_params, eta=self.eta,
                              random_state=self.random_state)
-        history, model_futures = r
+        history, params, model_futures = r
+
         self.history_ = history
         self._model_futures = model_futures
 
-        # TODO: set best index, best model, etc
+        cv_res, best_idx = _get_cv_results(history, params)
+        best_id = cv_res['model_id'][best_idx]
+
+        best_model_and_meta = yield model_futures[best_id]
+        self.best_estimator_ = best_model_and_meta[0]
+
+        self.cv_results_ = cv_res
+        self.best_index_ = best_idx
+        self.n_splits_ = 1  # TODO: increase this! It's hard-coded right now
+        self.multimetric_ = False
+
         return self
 
     @property
@@ -261,7 +285,7 @@ class HyperbandCV(DaskBaseSearchCV):
                                  asynchronous=self.asynchronous,
                                  dry_run=True, eta=self.eta,
                                  random_state=self.random_state)
-            history, _ = r
+            history, _, _ = r
 
         brackets = groupby("bracket", history)
         keys = sorted(brackets.keys())
@@ -278,3 +302,22 @@ class HyperbandCV(DaskBaseSearchCV):
         res.update(**info)
         assert isinstance(res, dict)
         return res
+
+
+def _get_cv_results(history, params):
+    scores = [h['score'] for h in history]
+    best_idx = int(np.argmax(scores))
+    keys = set(toolz.merge(history).keys())
+    for unused in ['bracket', 'iterations', 'num_models', 'bracket_iter',
+                   'score']:
+        keys.discard(unused)
+    cv_results = {k: [h[k] for h in history] for k in keys}
+
+    params = [params[model_id] for model_id in cv_results['model_id']]
+    cv_results['params'] = params
+    params = {'param_' + k: [param[k] for param in params]
+              for k in params[0].keys()}
+    ranks = np.argsort(scores)[::-1]
+    cv_results['rank_test_score'] = ranks.tolist()
+    cv_results.update(params)
+    return cv_results, best_idx
