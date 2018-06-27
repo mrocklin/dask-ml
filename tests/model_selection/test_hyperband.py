@@ -1,42 +1,23 @@
-import itertools
-
 import numpy as np
 import scipy.stats
-
-import pytest
-
 from sklearn.linear_model import SGDClassifier
 
+import dask
+import dask.array as da
 from dask.distributed import Client, wait
 from distributed.utils_test import loop, cluster, gen_cluster
 from tornado import gen
-import dask.array as da
-import dask
 
 from dask_ml.datasets import make_classification
 from dask_ml.model_selection import HyperbandCV
 from dask_ml.wrappers import Incremental
 from dask_ml.model_selection._hyperband import _partial_fit
-#  from dask_ml.model_selection._hyperband import _top_k
 from dask_ml.utils import ConstantFunction
 from distributed.metrics import time
 
-
-#  def test_top_k():
-    #  in_ = [{'score': 0, 'model': '0'},
-           #  {'score': 1, 'model': '1'},
-           #  {'score': 2, 'model': '2'},
-           #  {'score': 3, 'model': '3'},
-           #  {'score': 4, 'model': '4'}]
-    #  top, bottom = _top_k(in_, k=2, sort="score")
-    #  assert top == [{'score': 4, 'model': '4'},
-                   #  {'score': 3, 'model': '3'}]
-    #  assert bottom == [{'score': 0, 'model': '0'},
-                      #  {'score': 1, 'model': '1'},
-                      #  {'score': 2, 'model': '2'}]
+import pytest
 
 
-# TODO (raise an issue, don't block): do we stop early for converegence?
 @pytest.mark.parametrize("array_type,library", [("dask.array", "dask-ml"),
                                                 ("numpy", "sklearn"),
                                                 ("numpy", "test")])
@@ -72,7 +53,6 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                                  random_state=42)
             search.fit(X, y, classes=da.unique(y))
 
-            # Test user API
             score = search.best_estimator_.score(X, y)
             if library in {"sklearn", "dask-ml"}:
                 assert score > 0.6
@@ -83,12 +63,15 @@ def test_sklearn(array_type, library, loop, max_iter=27):
 
             num_fit_models = len(set(search.cv_results_['model_id']))
             assert (num_fit_models == 49)
+            best_idx = search.best_index_
+            assert (search.cv_results_['mean_test_score'][best_idx] ==
+                    max(search.cv_results_['mean_test_score']))
 
             info_plain = search.fit_metadata()
             info_train = search.fit_metadata(meta=search.meta_)
             # NOTE: this currently fails with sklearn and dask-ml models (not
             # test models). some of the bracket partial_fit_calls are off by
-            # about 20%
+            # about 20%.
             #  assert info_plain['brackets'] == info_train['brackets']
             #  assert info_train == info_plain
             for b1, b2 in zip(info_train['brackets'], info_plain['brackets']):
@@ -200,35 +183,3 @@ def test_integration(loop):
             assert isinstance(alg.best_score_, float)
             assert isinstance(alg.best_estimator_, ConstantFunction)
             assert isinstance(alg.best_params_, dict)
-
-
-#  def test_copy(loop):
-    #  """
-    #  Make sure models are not changed in place, and have the same parameters
-    #  each time
-    #  """
-    #  with cluster() as (s, [a, b]):
-        #  with Client(s['address'], loop=loop) as c:
-            #  rng = np.random.RandomState(42)
-            #  n, d = 100, 1
-            #  X = (np.arange(n * d) // d).reshape(n, d)
-            #  y = np.sign(rng.randn(n))
-            #  X = da.from_array(X, (2, d))
-            #  y = da.from_array(y, 2)
-
-            #  model = ConstantFunction()
-            #  params = {'value': np.logspace(-2, 1, num=1000)}
-
-            #  max_iter = 27
-            #  alg = HyperbandCV(model, params, max_iter=max_iter,
-                              #  random_state=42)
-            #  alg.fit(X, y, classes=da.unique(y))
-
-            #  all_models = alg._all_models
-
-    #  copied_models = list(filter(lambda x: len(x) > 1,
-                              #  all_models.values()))
-    #  assert len(copied_models) > 1
-    #  for models in copied_models:
-        #  assert all(not np.allclose(m1.coef_, m2.coef_)
-                   #  for m1, m2 in itertools.combinations(models, 2))

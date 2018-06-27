@@ -19,6 +19,20 @@ from .._utils import copy_learned_attributes
 
 
 def _get_hyperband_params(R, eta=3):
+    """
+    Arguments
+    ---------
+    R : int
+        The maximum number of iterations desired.
+    Returns
+    -------
+    N : list
+        The number of models for each bracket
+    R : list
+        The number of iterations for each bracket
+    brackets : list
+        The bracket identifier.
+    """
     s_max = math.floor(math.log(R, eta))
     B = (s_max + 1) * R
 
@@ -124,7 +138,7 @@ def _model_id(s, n_i):
 
 
 async def _hyperband(model, params, X, y, max_iter=None, eta=None,
-                     fit_params={}, random_state=42):
+                     fit_params={}, random_state=42, test_size=None):
     client = default_client()
     rng = check_random_state(random_state)
     N, R, brackets = _get_hyperband_params(max_iter, eta=eta)
@@ -135,14 +149,14 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
     model_futures = {_model_id(s, n_i):
                      client.submit(_create_model, model,
                                    params[_model_id(s, n_i)],
-                                   random_state=rng)
+                                   random_state=rng.randint(100 * sum(N)))
                      for s, n, r in zip(brackets, N, R) for n_i in range(n)}
 
     # lets assume everything in fit_params is small and make it concrete
     fit_params = await client.compute(fit_params)
 
     # TODO: pass in 0.15 as a keyword argument
-    r = train_test_split(X, y, test_size=0.15, random_state=rng)
+    r = train_test_split(X, y, test_size=test_size, random_state=rng)
     X_train, X_test, y_train, y_test = r
     if isinstance(X, da.Array):
         X_train = futures_of(X_train.persist())
@@ -213,25 +227,128 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
 
 
 class HyperbandCV(DaskBaseSearchCV):
-    """
-    Perform a state-of-the-art model selection algorithm.
+    """Find the best parameters for a particular model with cross-validation
 
-    This algorithm only requires computational budget as input and will find
-    close to the best possible parameters with the given computational budget.
+    This algorithm is state-of-the-art and only requires computational budget
+    as input. It will find close to the best possible parameters with the given
+    computational budget.
+
+    Parameters
+    ----------
+    model : object
+        An object that has support for ``partial_fit``, ``get_params``,
+        ``set_params`` and ``score``. This can be an instance of scikit-learn's
+        BaseEstimator
+    params : dict
+        The various parameters to search over.
+    max_iter : int, default=81
+        The maximum number of partial_fit calls to any one model.
+    eta : int, default=3
+        How aggressive to be in model tuning. It is not recommended to change
+        this value, and if changed we recommend ``eta=2`` or ``eta=4``. Higher
+        values implies high confidence in model selection.
+    random_state : int or np.random.RandomState
+        A random state for this class. Setting this helps enforce determinism.
+    scoring : str or callable
+        The scoring method by which to score different classifiers.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dask_ml.model_selection import HyperbandCV
+    >>> from dask_ml.datasets import make_classification
+    >>> from sklearn.linear_model import SGDClassifier
+    >>>
+    >>> X, y = make_classification(chunks=20)
+    >>> est = SGDClassifier(tol=1e-3)
+    >>> params = {'alpha': np.logspace(-4, 0, num=1000),
+    >>>           'loss': ['hinge', 'log', 'modified_huber', 'squared_hinge'],
+    >>>           'average': [True, False]}
+    >>>
+    >>> search = HyperbandCV(est, params)
+    >>> search.fit(X, y, classes=np.unique(y))
+    >>> search.best_params_
+    ... {'loss': 'log', 'average': False, 'alpha': 0.0080502}
+
+    Attributes
+    ----------
+    cv_results_ : dict of lists
+        Information about the cross validation scores for each model.
+        All lists are ordered the same, and this value can be imported into
+        a pandas DataFrame. This dict has keys of
+
+            * ``rank_test_score``
+            * ``model_id``
+            * ``mean_fit_time``
+            * ``mean_score_time``
+            * ``std_fit_time``
+            * ``std_score_time``
+            * ``mean_test_score``
+            * ``std_test_score``
+            * ``partial_fit_calls``
+            * ``mean_train_score``
+            * ``std_train_score``
+            * ``params``
+            * ``param_value``
+            * ``mean_copy_time``
+
+    meta_ : dict
+        Information about every model that was trained. Can be used as input to
+        ``fit_metadata``.
+    history_ : list of dicts
+        Information about every model after it is scored. Most models will be
+        in here more than once because poor performing models are "killed" off
+        early.
+    best_params_ : dict
+        The params that produced the best performing model
+    best_estimator_ : any
+        The best performing model
+    best_index_ :
+    n_splits_ : int
+        The number of cross-validation splits.
+    multimetric_ :
+        Whether or whether this model selection algorithm is multimetric.
+    test_size : float, default 0.15
+        The fraction of test set that should be used for testing.
+
+    Notes
+    -----
+    Hyperband is state of the art via an adaptive scheme: that only spends time
+    on high-performing modelsi, because our goal is to find the highest
+    performing model. This means that it stops training models that perform
+    poorly.
+
+    References
+    ----------
+    1. "Hyperband: A novel bandit-based approach to hyperparameter
+       optimization", 2016 by L. Li, K. Jamieson, G. DeSalvo, A. Rostamizadeh,
+       and A. Talwalkar.  https://arxiv.org/abs/1603.06560
 
     """
     def __init__(self, model, params, max_iter=81, eta=3, random_state=42,
-                 scoring=None):
+                 scoring=None, test_size=0.15):
         self.model = model
         self.params = params
         self.max_iter = max_iter
         self.eta = eta
         self.random_state = random_state
         self.scoring = scoring
+        self.test_size = test_size
 
         super(HyperbandCV, self).__init__(model)
 
     def fit(self, X, y, **fit_params):
+        """Find the best parameters for a particular model
+
+        Arguments
+        ---------
+        X, y : two dask.arrays or np.ndarrays
+            Input to ``fit``. X.ndim == 2 and y.ndim == 1. If dask arrays are
+            passed, each ``partial_fit`` call will be over one chunk of the
+            array.
+        fit_params : dict
+            Arguments to pass to ``model.partial_fit``
+        """
         return default_client().sync(self._fit, X, y, **fit_params)
 
     @gen.coroutine
@@ -243,7 +360,8 @@ class HyperbandCV(DaskBaseSearchCV):
         r = yield _hyperband(self.model, self.params, X, y,
                              max_iter=self.max_iter,
                              fit_params=fit_params, eta=self.eta,
-                             random_state=self.random_state)
+                             random_state=self.random_state,
+                             test_size=self.test_size)
         params, model_meta_futures, history, meta = r
 
         self.meta_ = meta
@@ -263,6 +381,27 @@ class HyperbandCV(DaskBaseSearchCV):
         return self
 
     def fit_metadata(self, meta=None):
+        """Get information about how much computation is required for ``fit``.
+
+        Arguments
+        ---------
+        meta : dict, optional.
+            Information about the computation that occured, available through
+            ``HyperbandCV.meta_``.
+
+        Returns
+        -------
+        info : dict
+            Information about the computation performed by ``fit``. Has
+            information about the total number of ``partial_fit`` calls
+            and the total number of models created, available under the keys
+            ``total_partial_fit_calls`` and ``total_models``.
+
+            There is also an additional key ``brackets`` that details the same
+            information for each bracket, and the number of times
+            ``partial_fit`` is called on the models in this bracket through
+            the key ``iters``.
+        """
         if meta is None:
             bracket_info = _hyperband_paper_alg(self.max_iter, eta=self.eta)
             total_models = sum(b['num_models'] for b in bracket_info)
