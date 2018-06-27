@@ -35,16 +35,17 @@ def test_sklearn(array_type, library, loop, max_iter=27):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
             chunk_size = 100  # make dask array with one chunk
-            X, y = make_classification(n_samples=chunk_size, n_features=20,
+            d = 20
+            X, y = make_classification(n_samples=chunk_size, n_features=d,
                                        random_state=42, chunks=chunk_size)
             if array_type == "numpy":
                 X = X.compute()
                 y = y.compute()
                 chunk_size = X.shape[0]
 
-            kwargs = dict(tol=1e-3, penalty='elasticnet', random_state=42)
+            kwargs = dict(tol=-np.inf, penalty='elasticnet', random_state=42)
             models = {'sklearn': SGDClassifier(**kwargs),
-                      'dask-ml': Incremental(SGDClassifier(random_state=42),
+                      'dask-ml': Incremental(SGDClassifier(**kwargs),
                                              **kwargs),
                       'test': ConstantFunction()}
             sgd_params = {'alpha': np.logspace(-2, 1, num=1000),
