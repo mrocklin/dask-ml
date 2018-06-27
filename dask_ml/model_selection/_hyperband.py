@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.model_selection import ParameterSampler
 from sklearn.utils import check_random_state
+from sklearn.metrics.scorer import check_scoring
 from tornado import gen
 import toolz
 
@@ -92,14 +93,13 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
     return model, meta
 
 
-def _score(model_and_meta, x, y):
+def _score(model_and_meta, x, y, scorer=None):
     model = model_and_meta[0]
-    score = model.score(x, y)
+    score = scorer(model, x, y)
 
     start = time()
     meta = deepcopy(model_and_meta[1])
     meta['mean_copy_time'] += time() - start
-    # TODO: change this to dask_ml.get_scorer
     meta.update(score=score)
     assert meta['iterations'] > 0
     meta['mean_score_time'] += time() - start
@@ -138,11 +138,15 @@ def _model_id(s, n_i):
 
 
 async def _hyperband(model, params, X, y, max_iter=None, eta=None,
-                     fit_params={}, random_state=42, test_size=None):
+                     fit_params={}, random_state=42, test_size=None,
+                     scorer=None):
     client = default_client()
     rng = check_random_state(random_state)
     N, R, brackets = _get_hyperband_params(max_iter, eta=eta)
-    params = iter(ParameterSampler(params, n_iter=sum(N), random_state=rng))
+    #  params = iter(ParameterSampler(params, n_iter=sum(N), random_state=rng))
+    params = [ParameterSampler(params, 1, random_state=rng.randint(sum(N)))
+              for _ in range(sum(N))]
+    params = iter([list(p)[0] for p in params])
 
     params = {_model_id(s, n_i): next(params)
               for s, n, r in zip(brackets, N, R) for n_i in range(n)}
@@ -195,7 +199,8 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
 
     assert set(model_meta_futures.keys()) == set(model_futures.keys())
 
-    score_futures = [client.submit(_score, model_meta_future, X_test, y_test)
+    score_futures = [client.submit(_score, model_meta_future, X_test, y_test,
+                                   scorer=scorer)
                      for _id, model_meta_future in model_meta_futures.items()]
 
     completed_jobs = {}
@@ -219,7 +224,7 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
             model_meta_futures[model_id] = model_meta_future
 
             score_future = client.submit(_score, model_meta_future, X_test,
-                                         y_test)
+                                         y_test, scorer=scorer)
             seq.add(score_future)
 
     assert completed_jobs.keys() == model_meta_futures.keys()
@@ -335,7 +340,7 @@ class HyperbandCV(DaskBaseSearchCV):
         self.scoring = scoring
         self.test_size = test_size
 
-        super(HyperbandCV, self).__init__(model)
+        super(HyperbandCV, self).__init__(model, scoring=scoring)
 
     def fit(self, X, y, **fit_params):
         """Find the best parameters for a particular model
@@ -357,11 +362,16 @@ class HyperbandCV(DaskBaseSearchCV):
             X = da.from_array(X, chunks=X.shape)
         if isinstance(y, np.ndarray):
             y = da.from_array(y, chunks=y.shape)
+
+        # We always want a concrete scorer, so return_dask_score=False
+        # We want this because we're always scoring NumPy arrays
+        self.scorer_ = check_scoring(self.model, scoring=self.scoring)
         r = yield _hyperband(self.model, self.params, X, y,
                              max_iter=self.max_iter,
                              fit_params=fit_params, eta=self.eta,
                              random_state=self.random_state,
-                             test_size=self.test_size)
+                             test_size=self.test_size,
+                             scorer=self.scorer_)
         params, model_meta_futures, history, meta = r
 
         self.meta_ = meta

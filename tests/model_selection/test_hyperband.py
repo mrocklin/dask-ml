@@ -54,10 +54,12 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             search.fit(X, y, classes=da.unique(y))
 
             score = search.best_estimator_.score(X, y)
-            if library in {"sklearn", "dask-ml"}:
-                assert score > 0.6
+            if library == "sklearn":
+                assert score > 0.4
+            if library == "dask-ml":
+                assert score > 0.2
             elif library == "test":
-                assert score > 0.85
+                assert score > 0.8
             assert type(search.best_estimator_) == type(model)
             assert isinstance(search.best_params_, dict)
 
@@ -84,6 +86,71 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                         assert v1 == v2
 
             assert info_train['total_models'] == info_plain['total_models']
+
+
+@pytest.mark.parametrize("library", ["sklearn", "dask-ml"])
+def test_scoring_param(loop, library):
+    with cluster() as (s, [a, b]):
+        with Client(s['address'], loop=loop):
+            max_iter = 27
+            chunk_size = 20
+            X, y = make_classification(n_samples=100, n_features=20,
+                                       random_state=42, chunks=chunk_size)
+            X, y = dask.persist(X, y)
+            if library == "sklearn":
+                X = X.compute()
+                y = y.compute()
+
+            kwargs = dict(tol=1e-3, penalty='elasticnet', random_state=42)
+
+            model = SGDClassifier(**kwargs)
+            if library == 'dask-ml':
+                model = Incremental(model)
+
+            params = {'alpha': np.logspace(-2, 1, num=1000),
+                      'l1_ratio': np.linspace(0, 1, num=1000),
+                      'average': [True, False]}
+            alg1 = HyperbandCV(model, params, max_iter=max_iter, random_state=42,
+                               scoring="accuracy")
+            alg1.fit(X, y, classes=da.unique(y))
+
+            alg2 = HyperbandCV(model, params, max_iter=max_iter, random_state=42,
+                               scoring="r2")
+            alg2.fit(X, y, classes=da.unique(y))
+
+            assert alg1.scoring != alg2.scoring
+            assert alg1.scorer_ != alg2.scorer_
+            assert alg1.score(X, y) != alg2.score(X, y)
+
+#  @gen_cluster(client=True)
+#  async def test_scoring_param(c, s, a, b):
+    #  max_iter = 27
+    #  chunk_size = 20
+    #  X, y = make_classification(n_samples=100, n_features=20,
+                               #  random_state=42, chunks=chunk_size)
+    #  X, y = dask.persist(X, y)
+    #  await wait([X, y])
+    #  X = await X.compute()
+    #  y = await y.compute()
+
+    #  kwargs = dict(tol=1e-3, penalty='elasticnet', random_state=42)
+
+    #  model = SGDClassifier(**kwargs)
+
+    #  params = {'alpha': np.logspace(-2, 1, num=1000),
+              #  'l1_ratio': np.linspace(0, 1, num=1000),
+              #  'average': [True, False]}
+    #  alg1 = HyperbandCV(model, params, max_iter=max_iter, random_state=42,
+                       #  scoring="accuracy")
+    #  await alg1._fit(X, y, classes=da.unique(y))
+
+    #  alg2 = HyperbandCV(model, params, max_iter=max_iter, random_state=42,
+                       #  scoring="r2")
+    #  await alg2._fit(X, y, classes=da.unique(y))
+
+    #  from sklearn.metrics.scorer import check_scoring
+    #  assert check_scoring(model, 'accuracy') != check_scoring(model, 'r2')
+    #  assert alg1.scorer_ != alg2.scorer_
 
 
 @gen_cluster(client=True)
