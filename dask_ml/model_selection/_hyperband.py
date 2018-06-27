@@ -107,23 +107,34 @@ def _score(model_and_meta, x, y, scorer=None):
     return meta
 
 
-def _to_promote(result, completed_jobs, eta=None):
+def _to_promote(result, completed_jobs, eta=None, asynchronous=True):
     bracket_models = [r for r in completed_jobs
                       if r['bracket_iter'] == result['bracket_iter'] and
                       r['bracket'] == result['bracket']]
+    to_keep = len(bracket_models) // eta
 
     bracket_completed = len(bracket_models) == result['num_models']
-    if bracket_completed:
-        to_keep = len(bracket_models) // eta
-        top = toolz.topk(to_keep, bracket_models, key='score')
-        if to_keep <= 1:
-            return []
+    if not asynchronous and not bracket_completed:
+        to_keep = 0
+    if to_keep <= 1:
+        return []
+
+    def _promote_job(job):
+        job["num_models"] = to_keep
+        job['partial_fit_calls'] *= eta
+        job['bracket_iter'] += 1
+        return job
+
+    top = toolz.topk(to_keep, bracket_models, key='score')
+    if not asynchronous:
         for job in top:
-            job["num_models"] = to_keep
-            job['partial_fit_calls'] *= eta
-            job['bracket_iter'] += 1
+            job = _promote_job(job)
         return top
-    return []
+    else:
+        if result in top:
+            result = _promote_job(result)
+            return [result]
+        return []
 
 
 def _create_model(model, params, random_state=42):
@@ -139,7 +150,7 @@ def _model_id(s, n_i):
 
 async def _hyperband(model, params, X, y, max_iter=None, eta=None,
                      fit_params={}, random_state=42, test_size=None,
-                     scorer=None):
+                     scorer=None, asynchronous=None):
     client = default_client()
     rng = check_random_state(random_state)
     N, R, brackets = _get_hyperband_params(max_iter, eta=eta)
@@ -211,7 +222,8 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
         history += [result]
 
         completed_jobs[result['model_id']] = result
-        promoted = _to_promote(result, completed_jobs.values(), eta=eta)
+        promoted = _to_promote(result, completed_jobs.values(), eta=eta,
+                               asynchronous=asynchronous)
         for job in promoted:
             i = rng.choice(len(X_train))
 
@@ -252,6 +264,11 @@ class HyperbandCV(DaskBaseSearchCV):
         How aggressive to be in model tuning. It is not recommended to change
         this value, and if changed we recommend ``eta=2`` or ``eta=4``. Higher
         values implies high confidence in model selection.
+    asynchronous : bool
+        Controls the adaptive process by estimating which models to train
+        further or making an informed choice by waiting for all jobs to
+        complete.  Having many workers benefits or quick jobs benefits from
+        asynchronous=True, which is what is recommended.
     random_state : int or np.random.RandomState
         A random state for this class. Setting this helps enforce determinism.
     scoring : str or callable
@@ -319,7 +336,7 @@ class HyperbandCV(DaskBaseSearchCV):
     Notes
     -----
     Hyperband is state of the art via an adaptive scheme: that only spends time
-    on high-performing modelsi, because our goal is to find the highest
+    on high-performing models, because our goal is to find the highest
     performing model. This means that it stops training models that perform
     poorly.
 
@@ -330,15 +347,17 @@ class HyperbandCV(DaskBaseSearchCV):
        and A. Talwalkar.  https://arxiv.org/abs/1603.06560
 
     """
-    def __init__(self, model, params, max_iter=81, eta=3, random_state=42,
-                 scoring=None, test_size=0.15):
+    def __init__(self, model, params, max_iter=81, eta=3, asynchronous=None,
+                 random_state=42, scoring=None, test_size=0.15):
         self.model = model
         self.params = params
         self.max_iter = max_iter
         self.eta = eta
-        self.random_state = random_state
-        self.scoring = scoring
         self.test_size = test_size
+        self.random_state = random_state
+        if asynchronous is None:
+            asynchronous = True
+        self.asynchronous = asynchronous
 
         super(HyperbandCV, self).__init__(model, scoring=scoring)
 
@@ -371,7 +390,8 @@ class HyperbandCV(DaskBaseSearchCV):
                              fit_params=fit_params, eta=self.eta,
                              random_state=self.random_state,
                              test_size=self.test_size,
-                             scorer=self.scorer_)
+                             scorer=self.scorer_,
+                             asynchronous=self.asynchronous)
         params, model_meta_futures, history, meta = r
 
         self.meta_ = meta
@@ -402,35 +422,45 @@ class HyperbandCV(DaskBaseSearchCV):
         Returns
         -------
         info : dict
-            Information about the computation performed by ``fit``. Has
-            information about the total number of ``partial_fit`` calls
-            and the total number of models created, available under the keys
-            ``total_partial_fit_calls`` and ``total_models``.
+            Information about the computation performed by ``fit``.
 
-            There is also an additional key ``brackets`` that details the same
-            information for each bracket, and the number of times
-            ``partial_fit`` is called on the models in this bracket through
-            the key ``iters``.
+        Notes
+        ------
+        Info has information about the total number of ``partial_fit`` calls
+        and the total number of models created, available under the keys
+        ``num_partial_fit_calls`` and ``num_models``.
+
+        Note that when asynchronous is True and meta is None, the amount of
+        computation described by this function is a lower bound: more
+        computation will be done if asynchronous is True.
+
+        For more detail, there is also another keyword that describes the
+        details of Hyperband.
+        For each Hyperband bracket, the number of times
+        ``partial_fit`` is called on the models in this bracket through
+        the key ``iters`` as well as
+
         """
         if meta is None:
             bracket_info = _hyperband_paper_alg(self.max_iter, eta=self.eta)
-            total_models = sum(b['num_models'] for b in bracket_info)
+            num_models = sum(b['num_models'] for b in bracket_info)
         else:
             brackets = toolz.groupby("bracket", meta)
+            fit_call_key = 'partial_fit_calls'
             bracket_info = [{'num_models': max(vi['num_models'] for vi in v),
-                             'partial_fit_calls': sum(vi['partial_fit_calls']
-                                                      for vi in v),
+                             'num_' + fit_call_key: sum(vi[fit_call_key]
+                                                        for vi in v),
                              'bracket': k,
-                             'iters': {vi['partial_fit_calls'] for vi in v}}
+                             'iters': {vi[fit_call_key] for vi in v}}
                             for k, v in brackets.items()]
-            total_models = len(set([r['model_id'] for r in meta]))
+            num_models = len(set([r['model_id'] for r in meta]))
         for bracket in bracket_info:
             bracket['iters'] = sorted(list(bracket['iters']))
-        total_partial_fit = sum(b['partial_fit_calls'] for b in bracket_info)
+        num_partial_fit = sum(b['num_partial_fit_calls'] for b in bracket_info)
         bracket_info = sorted(bracket_info, key=lambda x: x['bracket'])
 
-        info = {'total_partial_fit_calls': total_partial_fit,
-                'total_models': total_models,
+        info = {'num_partial_fit_calls': num_partial_fit,
+                'num_models': num_models,
                 'brackets': bracket_info}
         return info
 
@@ -492,7 +522,7 @@ def _hyperband_paper_alg(R, eta=3):
         hists['bracket={s}'.format(s=s)] = hist
 
     info = [{'bracket': k, 'num_models': hist['num_models'],
-             'partial_fit_calls': sum(hist['models'].values()),
+             'num_partial_fit_calls': sum(hist['models'].values()),
              'iters': set(hist['iters'])}
             for k, hist in hists.items()]
     return info
