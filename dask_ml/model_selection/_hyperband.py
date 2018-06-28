@@ -135,6 +135,8 @@ def _to_promote(result, completed_jobs, eta=None, asynchronous=True):
             job = _promote_job(job)
         return top
     else:
+        if to_keep == 0:
+            return [result]
         if result in top:
             result = _promote_job(result)
             return [result]
@@ -422,8 +424,6 @@ class HyperbandCV(DaskBaseSearchCV):
     def _logging_callback(self, result):
         if result['mean_test_score'] > self._best_score:
             msg = '[CV] new best validation score of {} found with params {}'
-            print(msg.format(result['mean_test_score'],
-                                   result['params']))
             logger.info(msg.format(result['mean_test_score'],
                                    result['params']))
             self._best_score = result['mean_test_score']

@@ -141,8 +141,6 @@ def test_async_keyword(loop):
 
             info0 = alg0.fit_metadata(meta=alg0.meta_)
             info1 = alg1.fit_metadata(meta=alg1.meta_)
-            assert (info0['num_partial_fit_calls'] <
-                    info1['num_partial_fit_calls'])
             assert (info0['num_models'] == info1['num_models'])
             assert alg0.score(X, y) == alg1.score(X, y)
 
@@ -198,7 +196,7 @@ def test_partial_fit_copy():
 @pytest.mark.parametrize("max_iter", [3, 9, 27, 81])
 def test_meta_computation(loop, max_iter):
     with cluster() as (s, [a, b]):
-        with Client(s['address'], loop=loop) as c:
+        with Client(s['address'], loop=loop):
             X, y = make_classification(chunks=5, n_features=5)
             model = ConstantFunction()
             params = {'value': scipy.stats.uniform(0, 1)}
@@ -216,7 +214,7 @@ def test_meta_computation(loop, max_iter):
 @pytest.mark.parametrize("asynchronous", [True, False])
 def test_integration(asynchronous, loop):
     with cluster() as (s, [a, b]):
-        with Client(s['address'], loop=loop) as c:
+        with Client(s['address'], loop=loop):
             X, y = make_classification(n_samples=10, n_features=4, chunks=10)
             model = ConstantFunction()
             params = {'value': scipy.stats.uniform(0, 1)}
