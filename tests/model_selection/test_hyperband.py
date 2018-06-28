@@ -5,7 +5,7 @@ from sklearn.linear_model import SGDClassifier
 import dask
 import dask.array as da
 from dask.distributed import Client, wait
-from distributed.utils_test import loop, cluster, gen_cluster
+from distributed.utils_test import loop, cluster, gen_cluster  # noqa: F401
 from tornado import gen
 
 from dask_ml.datasets import make_classification
@@ -18,9 +18,10 @@ from distributed.metrics import time
 import pytest
 
 
-@pytest.mark.parametrize("array_type,library", [("dask.array", "dask-ml"),
-                                                ("numpy", "sklearn"),
-                                                ("numpy", "test")])
+@pytest.mark.parametrize("array_type,library",  # noqa: F811
+                         [("dask.array", "dask-ml"),
+                          ("numpy", "sklearn"),
+                          ("numpy", "test")])
 def test_sklearn(array_type, library, loop, max_iter=27):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
@@ -88,7 +89,7 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             assert info_train['num_models'] == info_plain['num_models']
 
 
-@pytest.mark.parametrize("library", ["sklearn", "dask-ml"])
+@pytest.mark.parametrize("library", ["sklearn", "dask-ml"])  # noqa: F811
 def test_scoring_param(loop, library):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
@@ -123,7 +124,7 @@ def test_scoring_param(loop, library):
             assert alg1.score(X, y) != alg2.score(X, y)
 
 
-def test_async_keyword(loop):
+def test_async_keyword(loop):  # noqa: F811
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
             max_iter = 27
@@ -193,7 +194,7 @@ def test_partial_fit_copy():
     assert model.t_ < new_model.t_
 
 
-@pytest.mark.parametrize("max_iter", [3, 9, 27, 81])
+@pytest.mark.parametrize("max_iter", [3, 9, 27, 81])  # noqa: F811
 def test_meta_computation(loop, max_iter):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
@@ -211,7 +212,7 @@ def test_meta_computation(loop, max_iter):
             assert paper_info['brackets'] == actual_info['brackets']
 
 
-@pytest.mark.parametrize("asynchronous", [True, False])
+@pytest.mark.parametrize("asynchronous", [True, False])  # noqa: F811
 def test_integration(asynchronous, loop):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
