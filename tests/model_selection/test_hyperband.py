@@ -25,9 +25,9 @@ import pytest
 def test_sklearn(array_type, library, loop, max_iter=27):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
-            chunk_size = 100  # make dask array with one chunk
-            d = 20
-            X, y = make_classification(n_samples=chunk_size, n_features=d,
+            n, d = (300, 20)
+            chunk_size = n // 3
+            X, y = make_classification(n_samples=n, n_features=d,
                                        random_state=42, chunks=chunk_size)
             if array_type == "numpy":
                 X = X.compute()
@@ -56,11 +56,11 @@ def test_sklearn(array_type, library, loop, max_iter=27):
 
             score = search.best_estimator_.score(X, y)
             if library == "sklearn":
-                assert score > 0.4
+                assert score > 0.5
             if library == "dask-ml":
-                assert score > 0.2
+                assert score > 0.5
             elif library == "test":
-                assert score > 0.8
+                assert score > 0.9
             assert type(search.best_estimator_) == type(model)
             assert isinstance(search.best_params_, dict)
 
@@ -83,11 +83,15 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                     v2 = b2[key]
                     if key == 'num_partial_fit_calls':
                         diff = np.abs(v1 - v2) / v1
-                        assert diff < 0.2
+                        assert diff < 0.23
                     else:
                         assert v1 == v2
 
             assert info_train['num_models'] == info_plain['num_models']
+            part_fit_key = 'num_partial_fit_calls'
+            diff = (info_train[part_fit_key] - info_plain[part_fit_key])
+            diff /= info_plain[part_fit_key]
+            assert np.abs(diff) < 0.06
 
 
 @pytest.mark.parametrize("library", ["sklearn", "dask-ml"])  # noqa: F811
