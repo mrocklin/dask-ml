@@ -176,7 +176,6 @@ async def _hyperband(model, params, X, y, max_iter=None, eta=None,
     # lets assume everything in fit_params is small and make it concrete
     fit_params = await client.compute(fit_params)
 
-    # TODO: pass in 0.15 as a keyword argument
     r = train_test_split(X, y, test_size=test_size, random_state=rng)
     X_train, X_test, y_train, y_test = r
     if isinstance(X, da.Array):
@@ -256,8 +255,13 @@ class HyperbandCV(DaskBaseSearchCV):
     """Find the best parameters for a particular model with cross-validation
 
     This algorithm is state-of-the-art and only requires computational budget
-    as input. It will find close to the best possible parameters with the given
-    computational budget.
+    as input. It does not require a trade-off between "evaluate many
+    parameters" and "train for a long time" like RandomizedSearchCV. Hyperband
+    will find close to the best possible parameters with the given
+    computational budget [1]_.*
+
+    :sup:`* This will happen with high probability, and "close" means "within
+    a log factor of the lower bound"`
 
     Parameters
     ----------
@@ -268,7 +272,9 @@ class HyperbandCV(DaskBaseSearchCV):
     params : dict
         The various parameters to search over.
     max_iter : int, default=81
-        The maximum number of partial_fit calls to any one model.
+        The maximum number of partial_fit calls to any one model. This should
+        be the number of ``partial_fit`` calls required for the model to
+        converge.
     eta : int, default=3
         How aggressive to be in model tuning. It is not recommended to change
         this value, and if changed we recommend ``eta=2`` or ``eta=4``. Higher
@@ -308,24 +314,24 @@ class HyperbandCV(DaskBaseSearchCV):
         All lists are ordered the same, and this value can be imported into
         a pandas DataFrame. This dict has keys of
 
-            * ``rank_test_score``
-            * ``model_id``
-            * ``mean_fit_time``
-            * ``mean_score_time``
-            * ``std_fit_time``
-            * ``std_score_time``
-            * ``mean_test_score``
-            * ``std_test_score``
-            * ``partial_fit_calls``
-            * ``mean_train_score``
-            * ``std_train_score``
-            * ``params``
-            * ``param_value``
-            * ``mean_copy_time``
+        * ``rank_test_score``
+        * ``model_id``
+        * ``mean_fit_time``
+        * ``mean_score_time``
+        * ``std_fit_time``
+        * ``std_score_time``
+        * ``mean_test_score``
+        * ``std_test_score``
+        * ``partial_fit_calls``
+        * ``mean_train_score``
+        * ``std_train_score``
+        * ``params``
+        * ``param_value``
+        * ``mean_copy_time``
 
     meta_ : dict
         Information about every model that was trained. Can be used as input to
-        ``fit_metadata``.
+        :func:`~dask_ml.model_selection.HyperbandCV.fit_metadata`.
     history_ : list of dicts
         Information about every model after it is scored. Most models will be
         in here more than once because poor performing models are "killed" off
@@ -334,29 +340,67 @@ class HyperbandCV(DaskBaseSearchCV):
         The params that produced the best performing model
     best_estimator_ : any
         The best performing model
-    best_index_ :
+    best_index_ : int
+        The index of the best performing classifier to be used in
+        ``cv_results_``.
     n_splits_ : int
         The number of cross-validation splits.
     multimetric_ :
         Whether or whether this model selection algorithm is multimetric.
     test_size : float, default 0.15
         The fraction of test set that should be used for testing.
+    best_score : float
+        The best score, updated live as soon as scores are received.
+        This value is available even if
+        :func:`~dask_ml.model_selection.HyperbandCV` does not
+        complete. Note that this value may be higher than ``best_score_``
+        because intermediate values are considered before the model is
+        finished training.
+    best_params : dict
+        The parameters corresponding to ``best_score``, updated live as
+        soon as scores are received.  This value is available even if
+        :func:`~dask_ml.model_selection.HyperbandCV` does not complete.
 
     Notes
     -----
-    Hyperband is state of the art via an adaptive scheme: that only spends time
-    on high-performing models, because our goal is to find the highest
-    performing model. This means that it stops training models that perform
-    poorly.
+    Hyperband is state of the art via an adaptive scheme. Hyperband
+    only spends time on high-performing models, because our goal is to find
+    the highest performing model. This means that it stops training models
+    that perform poorly.
+
+    The asynchronous variant [2]_ is controlled by the ``asynchronous``
+    keyword and suited for highly parallel architectures. Architectures with
+    little parallism (i.e., few workers) will benefit from
+    ``asynchronous=False``.
+
+    If dask arrays are passed to
+    :func:`~dask_ml.model_selection.HyperbandCV.fit`, the estimator's
+    ``partial_fit`` method is called over each chunk of the array.
+    Determining how to chunk the array is not straightforward because
+    the number of ``partial_fit`` calls to reach converegence will depend on
+    the chunk size.
+
+    We recommend using time limits to determine how to chunk the
+    input arrays and how to choose ``max_iter``. We recommend
+    using :func:`~dask_ml.model_selection.HyperbandCV.fit_metadata` to help
+    choosing. For example, let's say ``num_epochs=5`` epochs or
+    passes over ``X`` are required for convergence and we are
+    constrained to 1500 partial_fit calls (by a deadline or something).
+    Then we recommend setting ``max_iter=81`` and the chunks of ``X``
+    to have a fractional size of ``num_epochs / max_iter = 0.0617...``
+    of the total size.
 
     References
     ----------
-    1. "Hyperband: A novel bandit-based approach to hyperparameter
-       optimization", 2016 by L. Li, K. Jamieson, G. DeSalvo, A. Rostamizadeh,
-       and A. Talwalkar.  https://arxiv.org/abs/1603.06560
+    .. [1] "Hyperband: A novel bandit-based approach to hyperparameter
+           optimization", 2016 by L. Li, K. Jamieson, G. DeSalvo, A.
+           Rostamizadeh, and A. Talwalkar.  https://arxiv.org/abs/1603.06560
+    .. [2] "Massively Parallel Hyperparameter Tuning", 2018 by L. Li, K.
+            Jamieson, A. Rostamizadeh, K. Gonina, M. Hardt, B. Recht, A.
+            Talwalkar.  https://openreview.net/forum?id=S1Y7OOlRZ
 
     """
-    def __init__(self, model, params, max_iter=81, eta=3, asynchronous=None,
+    def __init__(self, model, params, max_iter=81, eta=3, asynchronous=True,
                  random_state=42, scoring=None, test_size=0.15):
         self.model = model
         self.params = params
@@ -364,24 +408,21 @@ class HyperbandCV(DaskBaseSearchCV):
         self.eta = eta
         self.test_size = test_size
         self.random_state = random_state
-        if asynchronous is None:
-            asynchronous = True
         self.asynchronous = asynchronous
-        self._best_score = -np.inf
+
+        self.best_score = None
+        self.best_params = None
 
         super(HyperbandCV, self).__init__(model, scoring=scoring)
 
     def fit(self, X, y, **fit_params):
         """Find the best parameters for a particular model
 
-        Arguments
-        ---------
-        X, y : two dask.arrays or np.ndarrays
-            Input to ``fit``. X.ndim == 2 and y.ndim == 1. If dask arrays are
-            passed, each ``partial_fit`` call will be over one chunk of the
-            array.
-        fit_params : dict
-            Arguments to pass to ``model.partial_fit``
+        Parameters
+        ----------
+        X, y : array-like
+        **fit_params
+            Additional partial fit keyword arguments for the estimator.
         """
         return default_client().sync(self._fit, X, y, **fit_params)
 
@@ -395,6 +436,7 @@ class HyperbandCV(DaskBaseSearchCV):
         # We always want a concrete scorer, so return_dask_score=False
         # We want this because we're always scoring NumPy arrays
         self.scorer_ = check_scoring(self.model, scoring=self.scoring)
+        self.best_score = -np.inf
         r = yield _hyperband(self.model, self.params, X, y,
                              max_iter=self.max_iter,
                              fit_params=fit_params, eta=self.eta,
@@ -422,41 +464,37 @@ class HyperbandCV(DaskBaseSearchCV):
         return self
 
     def _logging_callback(self, result):
-        if result['mean_test_score'] > self._best_score:
+        if result['mean_test_score'] > self.best_score:
             msg = '[CV] new best validation score of {} found with params {}'
             logger.info(msg.format(result['mean_test_score'],
                                    result['params']))
-            self._best_score = result['mean_test_score']
+            self.best_score = result['mean_test_score']
+            self.best_params = result['params']
 
     def fit_metadata(self, meta=None):
-        """Get information about how much computation is required for ``fit``.
+        """Get information about how much computation is required for
+        :func:`~dask_ml.model_selection.HyperbandCV.fit`.
 
-        Arguments
-        ---------
+        Parameters
+        ----------
         meta : dict, optional.
-            Information about the computation that occured, available through
-            ``HyperbandCV.meta_``.
+            Information about the computation that occured. This argument
+            can be ``self.meta_``.
 
         Returns
         -------
-        info : dict
-            Information about the computation performed by ``fit``.
+        metadata : dict
+            Information about the computation performed by ``fit``. Has keys
+
+            * ``num_partial_fit_calls``, which is the total number of
+              partial fit calls.
+            * ``num_models``, which is the total number of models created.
 
         Notes
         ------
-        Info has information about the total number of ``partial_fit`` calls
-        and the total number of models created, available under the keys
-        ``num_partial_fit_calls`` and ``num_models``.
-
         Note that when asynchronous is True and meta is None, the amount of
         computation described by this function is a lower bound: more
         computation will be done if asynchronous is True.
-
-        For more detail, there is also another keyword that describes the
-        details of Hyperband.
-        For each Hyperband bracket, the number of times
-        ``partial_fit`` is called on the models in this bracket through
-        the key ``iters`` as well as
 
         """
         if meta is None:
@@ -479,7 +517,7 @@ class HyperbandCV(DaskBaseSearchCV):
 
         info = {'num_partial_fit_calls': num_partial_fit,
                 'num_models': num_models,
-                'brackets': bracket_info}
+                '_brackets': bracket_info}
         return info
 
 

@@ -69,6 +69,7 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             best_idx = search.best_index_
             assert (search.cv_results_['mean_test_score'][best_idx] ==
                     max(search.cv_results_['mean_test_score']))
+            assert search.best_score >= search.best_score_
 
             info_plain = search.fit_metadata()
             info_train = search.fit_metadata(meta=search.meta_)
@@ -77,7 +78,7 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             # about 20%.
             #  assert info_plain['brackets'] == info_train['brackets']
             #  assert info_train == info_plain
-            for b1, b2 in zip(info_train['brackets'], info_plain['brackets']):
+            for b1, b2 in zip(info_train['_brackets'], info_plain['_brackets']):
                 for key, v1 in b1.items():
                     v2 = b2[key]
                     if key == 'num_partial_fit_calls':
@@ -209,7 +210,7 @@ def test_meta_computation(loop, max_iter):
             assert paper_info['num_models'] == actual_info['num_models']
             assert (paper_info['num_partial_fit_calls'] ==
                     actual_info['num_partial_fit_calls'])
-            assert paper_info['brackets'] == actual_info['brackets']
+            assert paper_info['_brackets'] == actual_info['_brackets']
 
 
 @pytest.mark.parametrize("asynchronous", [True, False])  # noqa: F811

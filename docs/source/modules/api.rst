@@ -41,6 +41,7 @@ Dask-ML provides drop-in replacements for grid and randomized search.
 
    model_selection.GridSearchCV
    model_selection.RandomizedSearchCV
+   model_selection.HyperbandCV
 
 
 :mod:`dask_ml.linear_model`: Generalized Linear Models

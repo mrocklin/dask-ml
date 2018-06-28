@@ -7,6 +7,7 @@ Hyper Parameter Search
    dask_ml.model_selection.GridSearchCV
    sklearn.model_selection.RandomizedSearchCV
    dask_ml.model_selection.RandomizedSearchCV
+   dask_ml.model_selection.HyperbandCV
 
 Most estimators have a set of *hyper-parameters*.
 These are parameters that are not learned during training but instead must be
@@ -42,6 +43,42 @@ We'll see an example in the next section.
 
 Efficient Search
 ----------------
+
+Computation
+^^^^^^^^^^^
+
+We implement a state-of-the-art algorithm to choose hyperparameters in
+:class:`dask_ml.model_selection.HyperbandCV` [1]_. The goal of hyperparameter
+selection is to find the best or highest-scoring set of hyperparameters for a
+particular model. If we want to achieve that goal with as little computation as
+possible, it makes sense to spend time on high-performing models and not waste
+computation on low performing models.
+
+Hyperband only requires `one` input, some computational budget. Notably, it
+does not require a tradeoff between "train many parameters for a short time" or
+"train few parameters for a long time" like
+:class:`dask_ml.model_selection.RandomizedSearchCV`.
+With this input, Hyperband has guarantees on finding close to the best set of
+parameters possible given this computational input.*
+
+:class:`dask_ml.model_selection.HyperbandCV` also implements the asynchronous
+variant of Hyperband [2]_, which is well suited for the very parallel
+architectures Dask enables. The goal of this variant is to find the best set of
+parameters in the shortest time as possible, not as little computation as
+possible. It does this by not waiting for `every` model to finish before
+deciding to perform more computation on particular models.
+
+.. [1] "Hyperband: A novel bandit-based approach to hyperparameter
+       optimization", 2016 by L. Li, K. Jamieson, G. DeSalvo, A.
+       Rostamizadeh, and A. Talwalkar.  https://arxiv.org/abs/1603.06560
+.. [2] "Massively Parallel Hyperparameter Tuning", 2018 by L. Li, K.
+        Jamieson, A. Rostamizadeh, K. Gonina, M. Hardt, B. Recht, A.
+        Talwalkar.  https://openreview.net/forum?id=S1Y7OOlRZ
+
+:sup:`* This will happen with high probability, and "close" means "within a log factor of the lower bound"`
+
+Caching
+^^^^^^^
 
 However now each of our estimators in our pipeline have hyper-parameters,
 both expanding the space over which we want to search as well as adding
