@@ -296,7 +296,7 @@ class HyperbandCV(DaskBaseSearchCV):
     >>> search = HyperbandCV(est, params)
     >>> search.fit(X, y, classes=np.unique(y))
     >>> search.best_params_
-    ... {'loss': 'log', 'average': False, 'alpha': 0.0080502}
+    {'loss': 'log', 'average': False, 'alpha': 0.0080502}
 
     Attributes
     ----------
