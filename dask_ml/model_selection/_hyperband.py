@@ -15,7 +15,6 @@ from dask.distributed import as_completed, default_client, futures_of
 from distributed.metrics import time
 from dask_searchcv.model_selection import DaskBaseSearchCV
 
-from ..wrappers import Incremental
 from ._split import train_test_split
 from .._utils import copy_learned_attributes
 
@@ -83,16 +82,8 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
         meta = deepcopy(meta)
     meta['mean_copy_time'] += time() - start
     while meta['iterations'] < meta['partial_fit_calls']:
-        # TODO: handle this unwrapping elsewhere
-        if isinstance(model, Incremental):
-            model.estimator.partial_fit(X, y, **fit_params)
-        else:
-            model.partial_fit(X, y, **fit_params)
+        model.partial_fit(X, y, **fit_params)
         meta["iterations"] += 1
-    if isinstance(model, Incremental):
-        copy_start = time()
-        copy_learned_attributes(model.estimator, model)
-        meta['mean_copy_time'] += time() - copy_start
     meta['mean_fit_time'] += time() - start
     return model, meta
 
