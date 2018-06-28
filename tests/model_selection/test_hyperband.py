@@ -18,24 +18,25 @@ from distributed.metrics import time
 import pytest
 
 
-@pytest.mark.parametrize("array_type,library",  # noqa: F811
-                         [("dask.array", "dask-ml"),
-                          ("numpy", "sklearn"),
-                          ("numpy", "test")])
+@pytest.mark.parametrize(
+    "array_type,library",  # noqa: F811
+    [("dask.array", "dask-ml"), ("numpy", "sklearn"), ("numpy", "test")],
+)
 def test_sklearn(array_type, library, loop, max_iter=27):
     with cluster() as (s, [a, b]):
-        with Client(s['address'], loop=loop):
+        with Client(s["address"], loop=loop):
             n, d = (1000, 4)
             chunk_size = n // 2
-            X, y = make_classification(n_samples=n, n_features=d,
-                                       random_state=42, chunks=chunk_size)
+            X, y = make_classification(
+                n_samples=n, n_features=d, random_state=42, chunks=chunk_size
+            )
             if array_type == "numpy":
                 X = X.compute()
                 y = y.compute()
                 chunk_size = X.shape[0]
 
-            sgd_params = {'alpha': np.logspace(-3, 0, num=1000)}
-            kwargs = dict(tol=-np.inf, penalty='elasticnet', random_state=42)
+            sgd_params = {"alpha": np.logspace(-3, 0, num=1000)}
+            kwargs = dict(tol=-np.inf, penalty="elasticnet", random_state=42)
             if library == "sklearn":
                 model = SGDClassifier(**kwargs)
                 params = sgd_params
@@ -44,12 +45,13 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                 params = sgd_params
             elif library == "test":
                 model = ConstantFunction()
-                params = {'value': np.linspace(0, 1, num=1000)}
+                params = {"value": np.linspace(0, 1, num=1000)}
             else:
                 raise ValueError
 
-            search = HyperbandCV(model, params, max_iter=max_iter,
-                                 random_state=42, asynchronous=False)
+            search = HyperbandCV(
+                model, params, max_iter=max_iter, random_state=42, asynchronous=False
+            )
             search.fit(X, y, classes=da.unique(y))
 
             score = search.best_estimator_.score(X, y)
@@ -62,11 +64,12 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             assert type(search.best_estimator_) == type(model)
             assert isinstance(search.best_params_, dict)
 
-            num_fit_models = len(set(search.cv_results_['model_id']))
-            assert (num_fit_models == 49)
+            num_fit_models = len(set(search.cv_results_["model_id"]))
+            assert num_fit_models == 49
             best_idx = search.best_index_
-            assert (search.cv_results_['mean_test_score'][best_idx] ==
-                    max(search.cv_results_['mean_test_score']))
+            assert search.cv_results_["mean_test_score"][best_idx] == max(
+                search.cv_results_["mean_test_score"]
+            )
             assert search.best_score >= search.best_score_
 
             info_plain = search.fit_metadata()
@@ -76,18 +79,18 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             # about 20%.
             #  assert info_plain['brackets'] == info_train['brackets']
             #  assert info_train == info_plain
-            for b1, b2 in zip(info_train['_brackets'], info_plain['_brackets']):
+            for b1, b2 in zip(info_train["_brackets"], info_plain["_brackets"]):
                 for key, v1 in b1.items():
                     v2 = b2[key]
-                    if key == 'num_partial_fit_calls':
+                    if key == "num_partial_fit_calls":
                         diff = np.abs(v1 - v2) / v1
                         assert diff < 0.23
                     else:
                         assert v1 == v2
 
-            assert info_train['num_models'] == info_plain['num_models']
-            part_fit_key = 'num_partial_fit_calls'
-            diff = (info_train[part_fit_key] - info_plain[part_fit_key])
+            assert info_train["num_models"] == info_plain["num_models"]
+            part_fit_key = "num_partial_fit_calls"
+            diff = info_train[part_fit_key] - info_plain[part_fit_key]
             diff /= info_plain[part_fit_key]
             assert np.abs(diff) < 0.06
 
@@ -95,31 +98,32 @@ def test_sklearn(array_type, library, loop, max_iter=27):
 @pytest.mark.parametrize("library", ["sklearn", "dask-ml"])  # noqa: F811
 def test_scoring_param(loop, library):
     with cluster() as (s, [a, b]):
-        with Client(s['address'], loop=loop):
+        with Client(s["address"], loop=loop):
             max_iter = 27
             chunk_size = 20
-            X, y = make_classification(n_samples=100, n_features=20,
-                                       random_state=42, chunks=chunk_size)
+            X, y = make_classification(
+                n_samples=100, n_features=20, random_state=42, chunks=chunk_size
+            )
             X, y = dask.persist(X, y)
             if library == "sklearn":
                 X = X.compute()
                 y = y.compute()
 
-            kwargs = dict(tol=1e-3, penalty='elasticnet', random_state=42)
+            kwargs = dict(tol=1e-3, penalty="elasticnet", random_state=42)
 
             model = SGDClassifier(**kwargs)
-            if library == 'dask-ml':
+            if library == "dask-ml":
                 model = Incremental(model)
 
-            params = {'alpha': np.logspace(-2, 1, num=1000),
-                      'l1_ratio': np.linspace(0, 1, num=1000),
-                      'average': [True, False]}
-            alg1 = HyperbandCV(model, params, max_iter=max_iter,
-                               scoring="accuracy")
+            params = {
+                "alpha": np.logspace(-2, 1, num=1000),
+                "l1_ratio": np.linspace(0, 1, num=1000),
+                "average": [True, False],
+            }
+            alg1 = HyperbandCV(model, params, max_iter=max_iter, scoring="accuracy")
             alg1.fit(X, y, classes=da.unique(y))
 
-            alg2 = HyperbandCV(model, params, max_iter=max_iter,
-                               scoring="r2")
+            alg2 = HyperbandCV(model, params, max_iter=max_iter, scoring="r2")
             alg2.fit(X, y, classes=da.unique(y))
 
             assert alg1.scoring != alg2.scoring
@@ -129,23 +133,21 @@ def test_scoring_param(loop, library):
 
 def test_async_keyword(loop):  # noqa: F811
     with cluster() as (s, [a, b]):
-        with Client(s['address'], loop=loop):
+        with Client(s["address"], loop=loop):
             max_iter = 27
             X, y = make_classification(chunks=20)
             model = ConstantFunction()
 
-            params = {'value': np.logspace(-2, 1, num=max_iter)}
-            alg0 = HyperbandCV(model, params, asynchronous=False,
-                               max_iter=max_iter)
+            params = {"value": np.logspace(-2, 1, num=max_iter)}
+            alg0 = HyperbandCV(model, params, asynchronous=False, max_iter=max_iter)
             alg0.fit(X, y)
 
-            alg1 = HyperbandCV(model, params, asynchronous=True,
-                               max_iter=max_iter)
+            alg1 = HyperbandCV(model, params, asynchronous=True, max_iter=max_iter)
             alg1.fit(X, y)
 
             info0 = alg0.fit_metadata(meta=alg0.meta_)
             info1 = alg1.fit_metadata(meta=alg1.meta_)
-            assert (info0['num_models'] == info1['num_models'])
+            assert info0["num_models"] == info1["num_models"]
             assert alg0.score(X, y) == alg1.score(X, y)
 
 
@@ -153,18 +155,21 @@ def test_async_keyword(loop):  # noqa: F811
 async def test_sklearn_async(c, s, a, b):
     max_iter = 27
     chunk_size = 20
-    X, y = make_classification(n_samples=100, n_features=20,
-                               random_state=42, chunks=chunk_size)
+    X, y = make_classification(
+        n_samples=100, n_features=20, random_state=42, chunks=chunk_size
+    )
     X, y = dask.persist(X, y)
     await wait([X, y])
 
-    kwargs = dict(tol=1e-3, penalty='elasticnet', random_state=42)
+    kwargs = dict(tol=1e-3, penalty="elasticnet", random_state=42)
 
     model = SGDClassifier(**kwargs)
 
-    params = {'alpha': np.logspace(-2, 1, num=1000),
-              'l1_ratio': np.linspace(0, 1, num=1000),
-              'average': [True, False]}
+    params = {
+        "alpha": np.logspace(-2, 1, num=1000),
+        "l1_ratio": np.linspace(0, 1, num=1000),
+        "average": [True, False],
+    }
     search = HyperbandCV(model, params, max_iter=max_iter, random_state=42)
     s_tasks = set(s.tasks)
     c_futures = set(c.futures)
@@ -176,23 +181,29 @@ async def test_sklearn_async(c, s, a, b):
         await gen.sleep(0.01)
         assert time() < start + 5
 
-    assert len(set(search.cv_results_['model_id'])) == 49
+    assert len(set(search.cv_results_["model_id"])) == 49
 
 
 def test_partial_fit_copy():
     n, d = 100, 20
-    X, y = make_classification(n_samples=n, n_features=d,
-                               random_state=42, chunks=(n, d))
+    X, y = make_classification(
+        n_samples=n, n_features=d, random_state=42, chunks=(n, d)
+    )
     X = X.compute()
     y = y.compute()
-    meta = {'iterations': 0, 'mean_copy_time': 0, 'mean_fit_time': 0,
-            'partial_fit_calls': 1}
+    meta = {
+        "iterations": 0,
+        "mean_copy_time": 0,
+        "mean_fit_time": 0,
+        "partial_fit_calls": 1,
+    }
     model = SGDClassifier(tol=1e-3)
-    model.partial_fit(X[:n // 2], y[:n // 2], classes=np.unique(y))
-    new_model, new_meta = _partial_fit((model, meta), X[n // 2:], y[n // 2:],
-                                       fit_params={'classes': np.unique(y)})
+    model.partial_fit(X[: n // 2], y[: n // 2], classes=np.unique(y))
+    new_model, new_meta = _partial_fit(
+        (model, meta), X[n // 2 :], y[n // 2 :], fit_params={"classes": np.unique(y)}
+    )
     assert meta != new_meta
-    assert new_meta['iterations'] == 1
+    assert new_meta["iterations"] == 1
     assert not np.allclose(model.coef_, new_model.coef_)
     assert model.t_ < new_model.t_
 
@@ -200,49 +211,62 @@ def test_partial_fit_copy():
 @pytest.mark.parametrize("max_iter", [3, 9, 27, 81])  # noqa: F811
 def test_meta_computation(loop, max_iter):
     with cluster() as (s, [a, b]):
-        with Client(s['address'], loop=loop):
+        with Client(s["address"], loop=loop):
             X, y = make_classification(chunks=5, n_features=5)
             model = ConstantFunction()
-            params = {'value': scipy.stats.uniform(0, 1)}
-            alg = HyperbandCV(model, params, max_iter=max_iter, random_state=0,
-                              asynchronous=False)
+            params = {"value": scipy.stats.uniform(0, 1)}
+            alg = HyperbandCV(
+                model, params, max_iter=max_iter, random_state=0, asynchronous=False
+            )
             alg.fit(X, y)
             paper_info = alg.fit_metadata()
             actual_info = alg.fit_metadata(meta=alg.meta_)
-            assert paper_info['num_models'] == actual_info['num_models']
-            assert (paper_info['num_partial_fit_calls'] ==
-                    actual_info['num_partial_fit_calls'])
-            assert paper_info['_brackets'] == actual_info['_brackets']
+            assert paper_info["num_models"] == actual_info["num_models"]
+            assert (
+                paper_info["num_partial_fit_calls"]
+                == actual_info["num_partial_fit_calls"]
+            )
+            assert paper_info["_brackets"] == actual_info["_brackets"]
 
 
 @pytest.mark.parametrize("asynchronous", [True, False])  # noqa: F811
 def test_integration(asynchronous, loop):
     with cluster() as (s, [a, b]):
-        with Client(s['address'], loop=loop):
+        with Client(s["address"], loop=loop):
             X, y = make_classification(n_samples=10, n_features=4, chunks=10)
             model = ConstantFunction()
-            params = {'value': scipy.stats.uniform(0, 1)}
+            params = {"value": scipy.stats.uniform(0, 1)}
             alg = HyperbandCV(model, params, asynchronous=asynchronous)
             alg.fit(X, y)
             cv_res_keys = set(alg.cv_results_.keys())
-            assert cv_res_keys == {'rank_test_score', "model_id",
-                                   'mean_fit_time', 'mean_score_time',
-                                   'std_fit_time', 'std_score_time',
-                                   'mean_test_score', 'std_test_score',
-                                   'partial_fit_calls', 'mean_train_score',
-                                   'std_train_score', 'params', 'param_value',
-                                   'mean_copy_time'}
-            for column, dtype in [('rank_test_score', int),
-                                  ('model_id', str),
-                                  ('mean_score_time', float),
-                                  ('mean_test_score', float),
-                                  ('mean_fit_time', float),
-                                  ('partial_fit_calls', int),
-                                  ('params', dict),
-                                  ('param_value', float),
-                                  ('mean_copy_time', float)]:
-                assert all(isinstance(v, dtype)
-                           for v in alg.cv_results_[column])
+            assert cv_res_keys == {
+                "rank_test_score",
+                "model_id",
+                "mean_fit_time",
+                "mean_score_time",
+                "std_fit_time",
+                "std_score_time",
+                "mean_test_score",
+                "std_test_score",
+                "partial_fit_calls",
+                "mean_train_score",
+                "std_train_score",
+                "params",
+                "param_value",
+                "mean_copy_time",
+            }
+            for column, dtype in [
+                ("rank_test_score", int),
+                ("model_id", str),
+                ("mean_score_time", float),
+                ("mean_test_score", float),
+                ("mean_fit_time", float),
+                ("partial_fit_calls", int),
+                ("params", dict),
+                ("param_value", float),
+                ("mean_copy_time", float),
+            ]:
+                assert all(isinstance(v, dtype) for v in alg.cv_results_[column])
             alg.best_estimator_.fit(X, y)
             assert isinstance(alg.best_index_, int)
             assert isinstance(alg.best_score_, float)
