@@ -25,8 +25,8 @@ import pytest
 def test_sklearn(array_type, library, loop, max_iter=27):
     with cluster() as (s, [a, b]):
         with Client(s['address'], loop=loop):
-            n, d = (300, 20)
-            chunk_size = n // 3
+            n, d = (1000, 4)
+            chunk_size = n // 2
             X, y = make_classification(n_samples=n, n_features=d,
                                        random_state=42, chunks=chunk_size)
             if array_type == "numpy":
@@ -34,9 +34,7 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                 y = y.compute()
                 chunk_size = X.shape[0]
 
-            sgd_params = {'alpha': np.logspace(-2, 1, num=1000),
-                          'l1_ratio': np.linspace(0, 1, num=1000),
-                          'average': [True, False]}
+            sgd_params = {'alpha': np.logspace(-3, 0, num=1000)}
             kwargs = dict(tol=-np.inf, penalty='elasticnet', random_state=42)
             if library == "sklearn":
                 model = SGDClassifier(**kwargs)
@@ -56,7 +54,7 @@ def test_sklearn(array_type, library, loop, max_iter=27):
 
             score = search.best_estimator_.score(X, y)
             if library == "sklearn":
-                assert score > 0.5
+                assert score > 0.7
             if library == "dask-ml":
                 assert score > 0.5
             elif library == "test":
