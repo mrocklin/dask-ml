@@ -268,8 +268,9 @@ class HyperbandCV(DaskBaseSearchCV):
         converge.
     eta : int, default=3
         How aggressive to be in model tuning. It is not recommended to change
-        this value, and if changed we recommend ``eta=2`` or ``eta=4``. Higher
-        values implies high confidence in model selection.
+        this value, and if changed we recommend ``eta=2`` or ``eta=4``.
+        The theory behind Hyperband suggests ``eta=np.e``. Higher
+        values imply higher confidence in model selection.
     asynchronous : bool
         Controls the adaptive process by estimating which models to train
         further or making an informed choice by waiting for all jobs to
@@ -279,6 +280,10 @@ class HyperbandCV(DaskBaseSearchCV):
         A random state for this class. Setting this helps enforce determinism.
     scoring : str or callable
         The scoring method by which to score different classifiers.
+    test_size : float
+        Hyperband uses one test set for all example, and this controls the
+        size of that test set. It should be a floating point value between 0
+        and 1 to represent the number of examples to put into the test set.
 
     Examples
     --------
