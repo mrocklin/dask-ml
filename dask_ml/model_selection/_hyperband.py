@@ -13,10 +13,10 @@ import toolz
 import dask.array as da
 from dask.distributed import as_completed, default_client, futures_of
 from distributed.metrics import time
-from dask_searchcv.model_selection import DaskBaseSearchCV
 
 from ._split import train_test_split
 from .._utils import copy_learned_attributes
+from ._search import DaskBaseSearchCV
 
 
 logger = logging.getLogger(__name__)
