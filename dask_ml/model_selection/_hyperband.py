@@ -15,7 +15,6 @@ from dask.distributed import as_completed, default_client, futures_of
 from distributed.metrics import time
 
 from ._split import train_test_split
-from .._utils import copy_learned_attributes
 from ._search import DaskBaseSearchCV
 
 
@@ -529,7 +528,9 @@ class HyperbandCV(DaskBaseSearchCV):
     def _logging_callback(self, result):
         if result["mean_test_score"] > self.best_score:
             msg = "[CV] new best validation score of {} found with params {}"
-            logger.info(msg.format(result["mean_test_score"], result["params"]))
+            logger.info(
+                msg.format(result["mean_test_score"], result["params"])
+            )
             self.best_score = result["mean_test_score"]
             self.best_params = result["params"]
 
@@ -592,13 +593,21 @@ def _get_cv_results(history, params):
     scores = [h["score"] for h in history]
     best_idx = int(np.argmax(scores))
     keys = set(toolz.merge(history).keys())
-    for unused in ["bracket", "iterations", "num_models", "bracket_iter", "score"]:
+    for unused in [
+        "bracket",
+        "iterations",
+        "num_models",
+        "bracket_iter",
+        "score",
+    ]:
         keys.discard(unused)
     cv_results = {k: [h[k] for h in history] for k in keys}
 
     params = [params[model_id] for model_id in cv_results["model_id"]]
     cv_results["params"] = params
-    params = {"param_" + k: [param[k] for param in params] for k in params[0].keys()}
+    params = {
+        "param_" + k: [param[k] for param in params] for k in params[0].keys()
+    }
     ranks = np.argsort(scores)[::-1]
     cv_results["rank_test_score"] = ranks.tolist()
     cv_results.update(params)
@@ -626,7 +635,11 @@ def _hyperband_paper_alg(R, eta=3):
         r = int(R * eta ** -s)
 
         T = set(range(n))
-        hist = {"num_models": n, "models": {n: 0 for n in range(n)}, "iters": []}
+        hist = {
+            "num_models": n,
+            "models": {n: 0 for n in range(n)},
+            "iters": [],
+        }
         for i in range(s + 1):
             n_i = math.floor(n * eta ** -i)
             r_i = r * eta ** i
