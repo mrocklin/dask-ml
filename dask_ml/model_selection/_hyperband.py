@@ -87,13 +87,9 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
     return model, meta
 
 
-def _score(model_and_meta, X, Y, scorer=None, start=0):
+def _score(model_and_meta, x, y, scorer=None, start=0):
     model = model_and_meta[0]
-    scores = [scorer(model, x, y) for x, y in zip(X, Y)]
-    sizes = [x.shape[0] for x in X]
-    score_size = sum(sizes)
-    summed_scores = [score * size for score, size in zip(scores, sizes)]
-    score = sum(summed_scores) / score_size
+    score = scorer(model, x, y)
 
     score_start = time()
     meta = deepcopy(model_and_meta[1])
@@ -198,12 +194,12 @@ async def _hyperband(
     X_train, X_test, y_train, y_test = r
     if isinstance(X, da.Array):
         X_train = futures_of(X_train.persist())
-        X_test = futures_of(X_test.persist())
+        X_test = client.compute(X_test)
     else:
         X_train, X_test = await client.scatter([X_train, X_test])
     if isinstance(y, da.Array):
         y_train = futures_of(y_train.persist())
-        y_test = futures_of(y_test.persist())
+        y_test = client.compute(y_test)
     else:
         y_train, y_test = await client.scatter([y_train, y_test])
 
@@ -431,8 +427,9 @@ class HyperbandCV(DaskBaseSearchCV):
     these limitations are not inherit to the algorithm and are planned to be
     resolved. Hyperband
 
-    1. only implements one train/test split
-    2. does not cache models that have been already trained
+    1. does not implement proper cross validation
+    2. must have the test set fit into memory
+    3. does not implement caching models that have been already trained
 
     See https://github.com/dask/dask-ml/issues/250 for more information.
 
@@ -454,7 +451,7 @@ class HyperbandCV(DaskBaseSearchCV):
         max_iter=81,
         eta=3,
         asynchronous=True,
-        random_state=None,
+        random_state=42,
         scoring=None,
         test_size=0.15,
     ):
@@ -465,6 +462,9 @@ class HyperbandCV(DaskBaseSearchCV):
         self.test_size = test_size
         self.random_state = random_state
         self.asynchronous = asynchronous
+
+        self.best_score = None
+        self.best_params = None
 
         super(HyperbandCV, self).__init__(model, scoring=scoring)
 
