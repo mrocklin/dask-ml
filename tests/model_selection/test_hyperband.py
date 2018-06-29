@@ -43,8 +43,6 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             elif library == "test":
                 model = ConstantFunction()
                 params = {"value": np.linspace(0, 1, num=1000)}
-            else:
-                raise ValueError
 
             search = HyperbandCV(
                 model,
@@ -257,37 +255,39 @@ def test_integration(asynchronous, loop):
             alg = HyperbandCV(model, params, asynchronous=asynchronous)
             alg.fit(X, y)
             cv_res_keys = set(alg.cv_results_.keys())
-            assert cv_res_keys == {
-                "rank_test_score",
-                "model_id",
-                "mean_fit_time",
-                "mean_score_time",
-                "std_fit_time",
-                "std_score_time",
-                "mean_test_score",
-                "std_test_score",
-                "partial_fit_calls",
-                "mean_train_score",
-                "std_train_score",
-                "params",
-                "param_value",
-                "mean_copy_time",
-            }
-            for column, dtype in [
-                ("rank_test_score", int),
-                ("model_id", str),
-                ("mean_score_time", float),
-                ("mean_test_score", float),
-                ("mean_fit_time", float),
-                ("partial_fit_calls", int),
-                ("params", dict),
-                ("param_value", float),
-                ("mean_copy_time", float),
+            gt_zero = lambda x: x >= 0
+            is_type = lambda x, dtype: isinstance(x, dtype)
+            for column, dtype, condition in [
+                ("rank_test_score", int, None),
+                ("model_id", str, None),
+                ("mean_score_time", float, gt_zero),
+                ("mean_test_score", float, None),
+                ("mean_fit_time", float, gt_zero),
+                ("partial_fit_calls", int, gt_zero),
+                ("params", dict, lambda d: set(d.keys()) == {'value'}),
+                ("param_value", float, None),
+                ("mean_copy_time", float, gt_zero),
+                ("std_test_score", float, gt_zero),
+                ("std_score_time", float, gt_zero),
+                ("mean_train_score", None, None),
+                ("std_train_score", None, None),
+                ("std_fit_time", float, gt_zero),
+                ("mean_copy_time", float, gt_zero),
+                ("time_score_evaluated", float, gt_zero),
             ]:
-                assert all(
-                    isinstance(v, dtype) for v in alg.cv_results_[column]
-                )
+                if dtype:
+                    assert all(is_type(x, dtype) for x in alg.cv_results_[column])
+                if condition:
+                    assert all(condition(x) for x in alg.cv_results_[column])
+                cv_res_keys -= {column}
+
+            # the keys listed in the for-loop are all the keys in cv_results_
+            assert cv_res_keys == set()
+
             alg.best_estimator_.fit(X, y)
+            alg.best_estimator_.score(X, y)
+            alg.fit(X, y)
+            alg.score(X, y)
             assert isinstance(alg.best_index_, int)
             assert isinstance(alg.best_score_, float)
             assert isinstance(alg.best_estimator_, ConstantFunction)

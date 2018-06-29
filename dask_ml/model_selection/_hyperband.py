@@ -87,17 +87,18 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
     return model, meta
 
 
-def _score(model_and_meta, x, y, scorer=None):
+def _score(model_and_meta, x, y, scorer=None, start=0):
     model = model_and_meta[0]
     score = scorer(model, x, y)
 
-    start = time()
+    score_start = time()
     meta = deepcopy(model_and_meta[1])
-    meta["mean_copy_time"] += time() - start
+    meta["mean_copy_time"] += time() - score_start
     meta.update(score=score)
     assert meta["iterations"] > 0
-    meta["mean_score_time"] += time() - start
+    meta["mean_score_time"] += time() - score_start
     meta["mean_test_score"] = score
+    meta["time_score_evaluated"] = time() - start
     return meta
 
 
@@ -208,18 +209,18 @@ async def _hyperband(
                 "partial_fit_calls": r,
                 "bracket": "bracket={}".format(s),
                 "num_models": n,
-                "bracket_iter": 0,
+                "bracket_iter": 0.0,
                 "model_id": _model_id(s, n_i),
-                "mean_fit_time": 0,
+                "mean_fit_time": 0.0,
                 "mean_score_time": 0,
-                "std_fit_time": 0,
-                "std_score_time": 0,
-                "mean_test_score": 0,
-                "std_test_score": 0,
+                "std_fit_time": 0.0,
+                "std_score_time": 0.0,
+                "mean_test_score": 0.0,
+                "std_test_score": 0.0,
                 "mean_train_score": None,
                 "std_train_score": None,
-                "iterations": 0,
-                "mean_copy_time": 0,
+                "iterations": 0.0,
+                "mean_copy_time": 0.0,
                 "params": params[_model_id(s, n_i)],
             }
             for n_i in range(n)
@@ -233,6 +234,7 @@ async def _hyperband(
         for j, meta in enumerate(metas)
     }
 
+    hyperband_start = time()
     model_meta_futures = {
         meta["model_id"]: client.submit(
             _partial_fit,
@@ -249,7 +251,8 @@ async def _hyperband(
     assert set(model_meta_futures.keys()) == set(model_futures.keys())
 
     score_futures = [
-        client.submit(_score, model_meta_future, X_test, y_test, scorer=scorer)
+        client.submit(_score, model_meta_future, X_test, y_test, scorer=scorer,
+                      start=hyperband_start)
         for _id, model_meta_future in model_meta_futures.items()
     ]
 
@@ -280,7 +283,8 @@ async def _hyperband(
             model_meta_futures[model_id] = model_meta_future
 
             score_future = client.submit(
-                _score, model_meta_future, X_test, y_test, scorer=scorer
+                _score, model_meta_future, X_test, y_test, scorer=scorer,
+                start=hyperband_start
             )
             seq.add(score_future)
 
