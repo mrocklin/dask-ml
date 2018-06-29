@@ -23,9 +23,10 @@ In that case, why use Dask-ML's versions?
 - :ref:`Works well with Dask collections <works-with-dask-collections>`. Dask
   arrays, dataframes, and delayed can be passed to ``fit``.
 
-- :ref:`State-of-the-art model selection algorithms <hyperband>`. We have
-  implemented state-of-the-art algorithms that return models with the best
-  score possible given the amount of computation desired.
+- :ref:`Adaptive algorithms <hyperband>` that treat training time as a scarce
+  resource. The adaptive algorithms we have chosen to implement are
+  state-of-the-art and return models with the best score possible given the
+  amount of computation desired.
 
 - :ref:`Avoid repeated work <avoid-repeated-work>`. Candidate estimators with
   identical parameters and inputs will only be fit once. For
@@ -81,29 +82,32 @@ to pull it locally to your computer:
 
 .. _hyperband:
 
-State-of-the-art algorithms
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Adaptive algorithms
+^^^^^^^^^^^^^^^^^^^
 
-We implement a state-of-the-art algorithm to choose hyperparameters in
-:class:`dask_ml.model_selection.HyperbandCV` [1]_. The goal of hyperparameter
-selection is to find the best or highest-scoring set of hyperparameters for a
-particular model. If we want to achieve that goal with as little computation as
-possible, it makes sense to spend time on high-performing models and not waste
-computation on low performing models.
+Hyperband is a state-of-the-art algorithm to choose hyperparameters [1]_ [2]_
+that is implemented in Dask-ML. The goal of hyperparameter selection is to find
+the best or highest-scoring set of hyperparameters for a particular model.  If
+the goal is to find the best scoring hyperparameters with as little computation
+as possible, it makes sense to spend time on high-performing models and not
+waste computation on low performing models. This is especially an issue when a
+lots of hyperparameters are to be search over, or when models take a while to
+train. The adaptive approach requires that a partial evaluation of the model
+(i.e., that the model implements ``partial_fit``).
 
 Hyperband only requires `one` input, some computational budget. Notably, it
 does not require a tradeoff between "train many parameters for a short time" or
-"train few parameters for a long time" like
-:class:`dask_ml.model_selection.RandomizedSearchCV`.
-With this input, Hyperband has guarantees on finding close to the best set of
-parameters possible given this computational input.*
+"train few parameters for a long time" like mentioned in the docs
+:class:`dask_ml.model_selection.RandomizedSearchCV` for ``n_iter``.  With this
+input, Hyperband has guarantees on finding close to the best set of parameters
+possible given this computational input.* The theory behind this claim is very
+general and only requires two small assumptions.
 
-:class:`dask_ml.model_selection.HyperbandCV` also implements the asynchronous
-variant of Hyperband [2]_, which is well suited for the very parallel
-architectures Dask enables. The goal of this variant is to find the best set of
-parameters in the shortest time as possible, not as little computation as
-possible. It does this by not waiting for `every` model to finish before
-deciding to perform more computation on particular models.
+The synchronous and asynchronous version of Hyperband are both implemented.
+The asynchronous variant is best suited for the very parallel architectures
+that Dask provides.
+
+.. autosummary:: dask_ml.model_selection.HyperbandCV
 
 .. [1] "Hyperband: A novel bandit-based approach to hyperparameter
        optimization", 2016 by L. Li, K. Jamieson, G. DeSalvo, A.

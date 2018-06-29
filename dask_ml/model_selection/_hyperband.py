@@ -422,19 +422,16 @@ class HyperbandCV(DaskBaseSearchCV):
     If dask arrays are passed to
     :func:`~dask_ml.model_selection.HyperbandCV.fit`, the estimator's
     ``partial_fit`` method is called over each chunk of the array.
-    Determining how to chunk the array is not straightforward because
-    the number of ``partial_fit`` calls to reach converegence will depend on
-    the chunk size.
 
-    We recommend using time limits to determine how to chunk the
-    input arrays and how to choose ``max_iter``. We recommend
-    using :func:`~dask_ml.model_selection.HyperbandCV.fit_metadata` to help
-    choosing. For example, let's say ``num_epochs=5`` epochs or
-    passes over ``X`` are required for convergence and we are
-    constrained to 1500 partial_fit calls (by a deadline or something).
-    Then we recommend setting ``max_iter=81`` and the chunks of ``X``
-    to have a fractional size of ``num_epochs / max_iter = 0.0617...``
-    of the total size.
+    There are some limitations to this implementation of Hyperband, though
+    these limitations are not inherit to the algorithm and are planned to be
+    resolved. Hyperband
+
+    1. does not implement proper cross validation
+    2. must have the test set fit into memory
+    3. does not implement caching models that have been already trained
+
+    See https://github.com/dask/dask-ml/issues/250 for more information.
 
     References
     ----------
