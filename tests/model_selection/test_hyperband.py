@@ -161,14 +161,14 @@ def test_async_keyword(loop):  # noqa: F811
 
 
 @gen_cluster(client=True)
-async def test_sklearn_async(c, s, a, b):
+def test_sklearn_async(c, s, a, b):
     max_iter = 27
     chunk_size = 20
     X, y = make_classification(
         n_samples=100, n_features=20, random_state=42, chunks=chunk_size
     )
     X, y = dask.persist(X, y)
-    await wait([X, y])
+    yield wait([X, y])
 
     kwargs = dict(tol=1e-3, penalty="elasticnet", random_state=42)
 
@@ -182,12 +182,12 @@ async def test_sklearn_async(c, s, a, b):
     search = HyperbandCV(model, params, max_iter=max_iter, random_state=42)
     s_tasks = set(s.tasks)
     c_futures = set(c.futures)
-    await search._fit(X, y, classes=da.unique(y))
+    yield search._fit(X, y, classes=da.unique(y))
 
     assert set(c.futures) == c_futures
     start = time()
     while set(s.tasks) != s_tasks:
-        await gen.sleep(0.01)
+        yield gen.sleep(0.01)
         assert time() < start + 5
 
     assert len(set(search.cv_results_["model_id"])) == 49

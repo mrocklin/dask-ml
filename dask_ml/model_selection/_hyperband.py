@@ -1,3 +1,5 @@
+from __future__ import division
+
 from copy import deepcopy
 import logging
 import math
@@ -148,7 +150,8 @@ def _model_id(s, n_i):
     return "bracket={s}-{n_i}".format(s=s, n_i=n_i)
 
 
-async def _hyperband(
+@gen.coroutine
+def _hyperband(
     model,
     params,
     X,
@@ -188,7 +191,7 @@ async def _hyperband(
     }
 
     # lets assume everything in fit_params is small and make it concrete
-    fit_params = await client.compute(fit_params)
+    fit_params = yield client.compute(fit_params)
 
     r = train_test_split(X, y, test_size=test_size, random_state=rng)
     X_train, X_test, y_train, y_test = r
@@ -196,12 +199,12 @@ async def _hyperband(
         X_train = futures_of(X_train.persist())
         X_test = client.compute(X_test)
     else:
-        X_train, X_test = await client.scatter([X_train, X_test])
+        X_train, X_test = yield client.scatter([X_train, X_test])
     if isinstance(y, da.Array):
         y_train = futures_of(y_train.persist())
         y_test = client.compute(y_test)
     else:
-        y_train, y_test = await client.scatter([y_train, y_test])
+        y_train, y_test = yield client.scatter([y_train, y_test])
 
     info = {
         s: [
@@ -259,7 +262,9 @@ async def _hyperband(
     completed_jobs = {}
     seq = as_completed(score_futures, with_results=True)
     history = []
-    async for future, result in seq:
+
+    while not seq.is_empty():  # async for future, result in seq:
+        future, result = yield seq.__anext__()
         history += [result]
 
         completed_jobs[result["model_id"]] = result
@@ -288,8 +293,11 @@ async def _hyperband(
             )
             seq.add(score_future)
 
-    assert completed_jobs.keys() == model_meta_futures.keys()
-    return (params, model_meta_futures, history, list(completed_jobs.values()))
+    assert set(completed_jobs) == set(model_meta_futures)
+    raise gen.Return((params,
+                      model_meta_futures,
+                      history,
+                      list(completed_jobs.values())))
 
 
 class HyperbandCV(DaskBaseSearchCV):
@@ -517,7 +525,7 @@ class HyperbandCV(DaskBaseSearchCV):
         self.n_splits_ = 1  # TODO: increase this! It's hard-coded right now
         self.multimetric_ = False
 
-        return self
+        raise gen.Return(self)
 
     def fit_metadata(self, meta=None):
         """Get information about how much computation is required for
