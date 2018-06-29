@@ -18,8 +18,8 @@ from distributed.metrics import time
 import pytest
 
 
-@pytest.mark.parametrize(
-    "array_type,library",  # noqa: F811
+@pytest.mark.parametrize(  # noqa: F811
+    "array_type,library",
     [("dask.array", "dask-ml"), ("numpy", "sklearn"), ("numpy", "test")],
 )
 def test_sklearn(array_type, library, loop, max_iter=27):
@@ -210,8 +210,8 @@ def test_partial_fit_copy():
     model.partial_fit(X[: n // 2], y[: n // 2], classes=np.unique(y))
     new_model, new_meta = _partial_fit(
         (model, meta),
-        X[n // 2 :],
-        y[n // 2 :],
+        X[n // 2:],
+        y[n // 2:],
         fit_params={"classes": np.unique(y)},
     )
     assert meta != new_meta
@@ -239,8 +239,8 @@ def test_meta_computation(loop, max_iter):
             actual_info = alg.fit_metadata(meta=alg.meta_)
             assert paper_info["num_models"] == actual_info["num_models"]
             assert (
-                paper_info["num_partial_fit_calls"]
-                == actual_info["num_partial_fit_calls"]
+                paper_info["num_partial_fit_calls"] ==
+                actual_info["num_partial_fit_calls"]
             )
             assert paper_info["_brackets"] == actual_info["_brackets"]
 
@@ -276,7 +276,8 @@ def test_integration(asynchronous, loop):
                 ("time_score_evaluated", float, gt_zero),
             ]:
                 if dtype:
-                    assert all(is_type(x, dtype) for x in alg.cv_results_[column])
+                    assert all(is_type(x, dtype)
+                               for x in alg.cv_results_[column])
                 if condition:
                     assert all(condition(x) for x in alg.cv_results_[column])
                 cv_res_keys -= {column}
