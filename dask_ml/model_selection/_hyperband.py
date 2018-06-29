@@ -107,8 +107,8 @@ def _to_promote(result, completed_jobs, eta=None, asynchronous=True):
     bracket_models = [
         r
         for r in completed_jobs
-        if r["bracket_iter"] == result["bracket_iter"]
-        and r["bracket"] == result["bracket"]
+        if r["bracket_iter"] == result["bracket_iter"] and
+        r["bracket"] == result["bracket"]
     ]
     to_keep = len(bracket_models) // eta
 
