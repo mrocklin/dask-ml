@@ -273,7 +273,7 @@ def test_integration(asynchronous, loop):
                 ("std_train_score", None, None),
                 ("std_fit_time", float, gt_zero),
                 ("mean_copy_time", float, gt_zero),
-                ("time_score_evaluated", float, gt_zero),
+                ("time_scored", float, gt_zero),
             ]:
                 if dtype:
                     assert all(is_type(x, dtype) for x in alg.cv_results_[column])

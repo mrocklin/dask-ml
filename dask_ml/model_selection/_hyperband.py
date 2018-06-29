@@ -102,7 +102,7 @@ def _score(model_and_meta, X, Y, scorer=None, start=0):
     assert meta["iterations"] > 0
     meta["mean_score_time"] += time() - score_start
     meta["mean_test_score"] = score
-    meta["time_score_evaluated"] = time() - start
+    meta["time_scored"] = time() - start
     return meta
 
 
