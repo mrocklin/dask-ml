@@ -74,9 +74,10 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
 
     """
     start = time()
-    model = deepcopy(model_and_meta[0])
+    model, meta = model_and_meta
+    model = deepcopy(model)
     if meta is None:
-        meta = deepcopy(model_and_meta[1])
+        meta = deepcopy(meta)
     else:
         meta = deepcopy(meta)
     meta["mean_copy_time"] += time() - start
@@ -88,11 +89,11 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
 
 
 def _score(model_and_meta, x, y, scorer=None, start=0):
-    model = model_and_meta[0]
+    model, meta = model_and_meta
     score = scorer(model, x, y)
 
     score_start = time()
-    meta = deepcopy(model_and_meta[1])
+    meta = deepcopy(meta)
     meta["mean_copy_time"] += time() - score_start
     meta.update(score=score)
     assert meta["iterations"] > 0
@@ -423,15 +424,13 @@ class HyperbandCV(DaskBaseSearchCV):
     :func:`~dask_ml.model_selection.HyperbandCV.fit`, the estimator's
     ``partial_fit`` method is called over each chunk of the array.
 
-    There are some limitations to this implementation of Hyperband, though
-    these limitations are not inherit to the algorithm and are planned to be
-    resolved. Hyperband
+    There are some limitations to this implementation of Hyperband:
 
-    1. does not implement proper cross validation
-    2. must have the test set fit into memory
-    3. does not implement caching models that have been already trained
+    1. The full dataset is requested to be in memory
+    2. The testing dataset must fit comfortably within a single worker
 
-    See https://github.com/dask/dask-ml/issues/250 for more information.
+        You can control the test dataset size with the test_size parameter
+    3.  This does not implement cross validation
 
     References
     ----------
