@@ -255,10 +255,9 @@ async def _hyperband(
     ]
 
     completed_jobs = {}
-    seq = as_completed(score_futures)
+    seq = as_completed(score_futures, with_results=True)
     history = []
-    async for future in seq:
-        result = await future
+    async for future, result in seq:
         history += [result]
         if callback:
             callback(result)
