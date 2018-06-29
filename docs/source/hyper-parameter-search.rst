@@ -1,32 +1,39 @@
 Hyper Parameter Search
 ======================
 
-Tools for performing hyperparameter optimization of Scikit-Learn API-compatible
-models using Dask. Dask-ML implements GridSearchCV and RandomizedSearchCV,
-as well as HyperbandCV which conforms with the Scikit-Learn API.
+*Parallel tools for hyperparameter optimization of Scikit-Learn API-compatible
+models.*
+
+For parallel hyperparameter optimization you have a few options:
 
 .. autosummary::
    sklearn.model_selection.GridSearchCV
-   dask_ml.model_selection.GridSearchCV
    sklearn.model_selection.RandomizedSearchCV
+
+.. autosummary::
+   dask_ml.model_selection.GridSearchCV
    dask_ml.model_selection.RandomizedSearchCV
    dask_ml.model_selection.HyperbandCV
 
-The varians in Dask-ML implement many (but not all) of the same parameters,
-and should be a drop-in replacement for the subset that they do implement.
-In that case, why use Dask-ML's versions?
+The scikit-learn implementations can already run parallel on a single machine
+using the ``njobs=`` parameter.  Additionally you can scale them using the
+:doc:`Dask-Joblib connection <joblib>`
+
+The Dask-ML variants implement many (but not all) of the same parameters,
+and should be a drop-in replacement for the subset that they do implement, but
+are more efficient in a few ways:.
 
 - :ref:`Flexible Backends <flexible-backends>`: Hyperparameter
   optimization can be done in parallel using threads, processes, or distributed
-  across a cluster.
+  across a cluster.  Though this is also the same with the Scikit-Learn
+  versions with the Dask-joblib connection.
 
-- :ref:`Works well with Dask collections <works-with-dask-collections>`. Dask
-  arrays, dataframes, and delayed can be passed to ``fit``.
+- :ref:`Work well with Dask collections <works-with-dask-collections>`. Dask
+  arrays, dataframes, and delayed can be passed to the ``fit`` method.
 
-- :ref:`Adaptive algorithms <hyperband>` that treat training time as a scarce
-  resource. The adaptive algorithms we have chosen to implement are
-  state-of-the-art and return models with the best score possible given the
-  amount of computation desired.
+- :ref:`Adaptive algorithms <hyperband>` like Hyperband, that learn during the
+  computation and spend more time training models that seem to perform better
+  over time.
 
 - :ref:`Avoid repeated work <avoid-repeated-work>`. Candidate estimators with
   identical parameters and inputs will only be fit once. For
@@ -85,27 +92,14 @@ to pull it locally to your computer:
 Adaptive algorithms
 ^^^^^^^^^^^^^^^^^^^
 
-Hyperband is a state-of-the-art algorithm to choose hyperparameters [1]_ [2]_
-that is implemented in Dask-ML. The goal of hyperparameter selection is to find
-the best or highest-scoring set of hyperparameters for a particular model.  If
-the goal is to find the best scoring hyperparameters with as little computation
-as possible, it makes sense to spend time on high-performing models and not
-waste computation on low performing models. This is especially an issue when a
-lots of hyperparameters are to be search over, or when models take a while to
-train. The adaptive approach requires that a partial evaluation of the model
-(i.e., that the model implements ``partial_fit``).
+Adaptive algorithms learn during the hyperparameter selection process and focus
+computation where it matters most.
 
-Hyperband only requires `one` input, some computational budget. Notably, it
-does not require a tradeoff between "train many parameters for a short time" or
-"train few parameters for a long time" like mentioned in the docs
-:class:`dask_ml.model_selection.RandomizedSearchCV` for ``n_iter``.  With this
-input, Hyperband has guarantees on finding close to the best set of parameters
-possible given this computational input.* The theory behind this claim is very
-general and only requires two small assumptions.
-
-The synchronous and asynchronous version of Hyperband are both implemented.
-The asynchronous variant is best suited for the very parallel architectures
-that Dask provides.
+Dask-ML implements one adaptive algorithm, Hyperband [1]_ [2]_, which is useful
+in the incremental learning case where we train models over batches of data.
+This requires that your models support the ``.partial_fit(...)`` method.
+It works by trying many possible parameters on the first few chunks of data,
+and then only continues training for those parameters that perform well.
 
 .. autosummary:: dask_ml.model_selection.HyperbandCV
 
@@ -115,8 +109,6 @@ that Dask provides.
 .. [2] "Massively Parallel Hyperparameter Tuning", 2018 by L. Li, K.
         Jamieson, A. Rostamizadeh, K. Gonina, M. Hardt, B. Recht, A.
         Talwalkar.  https://openreview.net/forum?id=S1Y7OOlRZ
-
-:sup:`* This will happen with high probability, and "close" means "within a log factor of the lower bound"`
 
 .. _avoid-repeated-work:
 

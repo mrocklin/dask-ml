@@ -18,8 +18,8 @@ from distributed.metrics import time
 import pytest
 
 
-@pytest.mark.parametrize(
-    "array_type,library",  # noqa: F811
+@pytest.mark.parametrize(  # noqa: F811
+    "array_type,library",
     [("dask.array", "dask-ml"), ("numpy", "sklearn"), ("numpy", "test")],
 )
 def test_sklearn(array_type, library, loop, max_iter=27):
@@ -161,14 +161,14 @@ def test_async_keyword(loop):  # noqa: F811
 
 
 @gen_cluster(client=True)
-async def test_sklearn_async(c, s, a, b):
+def test_sklearn_async(c, s, a, b):
     max_iter = 27
     chunk_size = 20
     X, y = make_classification(
         n_samples=100, n_features=20, random_state=42, chunks=chunk_size
     )
     X, y = dask.persist(X, y)
-    await wait([X, y])
+    yield wait([X, y])
 
     kwargs = dict(tol=1e-3, penalty="elasticnet", random_state=42)
 
@@ -182,12 +182,12 @@ async def test_sklearn_async(c, s, a, b):
     search = HyperbandCV(model, params, max_iter=max_iter, random_state=42)
     s_tasks = set(s.tasks)
     c_futures = set(c.futures)
-    await search._fit(X, y, classes=da.unique(y))
+    yield search._fit(X, y, classes=da.unique(y))
 
     assert set(c.futures) == c_futures
     start = time()
     while set(s.tasks) != s_tasks:
-        await gen.sleep(0.01)
+        yield gen.sleep(0.01)
         assert time() < start + 5
 
     assert len(set(search.cv_results_["model_id"])) == 49
@@ -210,8 +210,8 @@ def test_partial_fit_copy():
     model.partial_fit(X[: n // 2], y[: n // 2], classes=np.unique(y))
     new_model, new_meta = _partial_fit(
         (model, meta),
-        X[n // 2 :],
-        y[n // 2 :],
+        X[n // 2:],
+        y[n // 2:],
         fit_params={"classes": np.unique(y)},
     )
     assert meta != new_meta
@@ -239,8 +239,8 @@ def test_meta_computation(loop, max_iter):
             actual_info = alg.fit_metadata(meta=alg.meta_)
             assert paper_info["num_models"] == actual_info["num_models"]
             assert (
-                paper_info["num_partial_fit_calls"]
-                == actual_info["num_partial_fit_calls"]
+                paper_info["num_partial_fit_calls"] ==
+                actual_info["num_partial_fit_calls"]
             )
             assert paper_info["_brackets"] == actual_info["_brackets"]
 
@@ -276,7 +276,8 @@ def test_integration(asynchronous, loop):
                 ("time_scored", float, gt_zero),
             ]:
                 if dtype:
-                    assert all(is_type(x, dtype) for x in alg.cv_results_[column])
+                    assert all(is_type(x, dtype)
+                               for x in alg.cv_results_[column])
                 if condition:
                     assert all(condition(x) for x in alg.cv_results_[column])
                 cv_res_keys -= {column}

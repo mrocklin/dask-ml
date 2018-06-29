@@ -1,3 +1,5 @@
+from __future__ import division
+
 from copy import deepcopy
 import logging
 import math
@@ -87,16 +89,12 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
     return model, meta
 
 
-def _score(model_and_meta, X, Y, scorer=None, start=0):
-    model = model_and_meta[0]
-    scores = [scorer(model, x, y) for x, y in zip(X, Y)]
-    sizes = [x.shape[0] for x in X]
-    score_size = sum(sizes)
-    summed_scores = [score * size for score, size in zip(scores, sizes)]
-    score = sum(summed_scores) / score_size
+def _score(model_and_meta, x, y, scorer=None, start=0):
+    model, meta = model_and_meta
+    score = scorer(model, x, y)
 
     score_start = time()
-    meta = deepcopy(model_and_meta[1])
+    meta = deepcopy(meta)
     meta["mean_copy_time"] += time() - score_start
     meta.update(score=score)
     assert meta["iterations"] > 0
@@ -110,8 +108,8 @@ def _to_promote(result, completed_jobs, eta=None, asynchronous=True):
     bracket_models = [
         r
         for r in completed_jobs
-        if r["bracket_iter"] == result["bracket_iter"]
-        and r["bracket"] == result["bracket"]
+        if r["bracket_iter"] == result["bracket_iter"] and
+        r["bracket"] == result["bracket"]
     ]
     to_keep = len(bracket_models) // eta
 
@@ -152,7 +150,8 @@ def _model_id(s, n_i):
     return "bracket={s}-{n_i}".format(s=s, n_i=n_i)
 
 
-async def _hyperband(
+@gen.coroutine
+def _hyperband(
     model,
     params,
     X,
@@ -192,20 +191,20 @@ async def _hyperband(
     }
 
     # lets assume everything in fit_params is small and make it concrete
-    fit_params = await client.compute(fit_params)
+    fit_params = yield client.compute(fit_params)
 
     r = train_test_split(X, y, test_size=test_size, random_state=rng)
     X_train, X_test, y_train, y_test = r
     if isinstance(X, da.Array):
         X_train = futures_of(X_train.persist())
-        X_test = futures_of(X_test.persist())
+        X_test = client.compute(X_test)
     else:
-        X_train, X_test = await client.scatter([X_train, X_test])
+        X_train, X_test = yield client.scatter([X_train, X_test])
     if isinstance(y, da.Array):
         y_train = futures_of(y_train.persist())
-        y_test = futures_of(y_test.persist())
+        y_test = client.compute(y_test)
     else:
-        y_train, y_test = await client.scatter([y_train, y_test])
+        y_train, y_test = yield client.scatter([y_train, y_test])
 
     info = {
         s: [
@@ -263,7 +262,9 @@ async def _hyperband(
     completed_jobs = {}
     seq = as_completed(score_futures, with_results=True)
     history = []
-    async for future, result in seq:
+
+    while not seq.is_empty():  # async for future, result in seq:
+        future, result = yield seq.__anext__()
         history += [result]
 
         completed_jobs[result["model_id"]] = result
@@ -292,8 +293,11 @@ async def _hyperband(
             )
             seq.add(score_future)
 
-    assert completed_jobs.keys() == model_meta_futures.keys()
-    return (params, model_meta_futures, history, list(completed_jobs.values()))
+    assert set(completed_jobs) == set(model_meta_futures)
+    raise gen.Return((params,
+                      model_meta_futures,
+                      history,
+                      list(completed_jobs.values())))
 
 
 class HyperbandCV(DaskBaseSearchCV):
@@ -427,14 +431,13 @@ class HyperbandCV(DaskBaseSearchCV):
     :func:`~dask_ml.model_selection.HyperbandCV.fit`, the estimator's
     ``partial_fit`` method is called over each chunk of the array.
 
-    There are some limitations to this implementation of Hyperband, though
-    these limitations are not inherit to the algorithm and are planned to be
-    resolved. Hyperband
+    There are some limitations to this implementation of Hyperband:
 
-    1. only implements one train/test split
-    2. does not cache models that have been already trained
+    1. The full dataset is requested to be in memory
+    2. The testing dataset must fit comfortably within a single worker
 
-    See https://github.com/dask/dask-ml/issues/250 for more information.
+        You can control the test dataset size with the test_size parameter
+    3.  This does not implement cross validation
 
     References
     ----------
@@ -454,7 +457,7 @@ class HyperbandCV(DaskBaseSearchCV):
         max_iter=81,
         eta=3,
         asynchronous=True,
-        random_state=None,
+        random_state=42,
         scoring=None,
         test_size=0.15,
     ):
@@ -465,6 +468,9 @@ class HyperbandCV(DaskBaseSearchCV):
         self.test_size = test_size
         self.random_state = random_state
         self.asynchronous = asynchronous
+
+        self.best_score = None
+        self.best_params = None
 
         super(HyperbandCV, self).__init__(model, scoring=scoring)
 
@@ -519,7 +525,7 @@ class HyperbandCV(DaskBaseSearchCV):
         self.n_splits_ = 1  # TODO: increase this! It's hard-coded right now
         self.multimetric_ = False
 
-        return self
+        raise gen.Return(self)
 
     def fit_metadata(self, meta=None):
         """Get information about how much computation is required for
