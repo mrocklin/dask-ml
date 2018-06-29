@@ -74,10 +74,9 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
 
     """
     start = time()
-    model, meta = model_and_meta
-    model = deepcopy(model)
+    model = deepcopy(model_and_meta[0])
     if meta is None:
-        meta = deepcopy(meta)
+        meta = deepcopy(model_and_meta[1])
     else:
         meta = deepcopy(meta)
     meta["mean_copy_time"] += time() - start
