@@ -159,7 +159,6 @@ async def _hyperband(
     test_size=None,
     scorer=None,
     asynchronous=None,
-    callback=None,
 ):
     client = default_client()
     rng = check_random_state(random_state)
@@ -259,8 +258,6 @@ async def _hyperband(
     history = []
     async for future, result in seq:
         history += [result]
-        if callback:
-            callback(result)
 
         completed_jobs[result["model_id"]] = result
         promoted = _to_promote(
@@ -501,7 +498,6 @@ class HyperbandCV(DaskBaseSearchCV):
             test_size=self.test_size,
             scorer=self.scorer_,
             asynchronous=self.asynchronous,
-            callback=self._logging_callback,
         )
         params, model_meta_futures, history, meta = r
 
@@ -520,15 +516,6 @@ class HyperbandCV(DaskBaseSearchCV):
         self.multimetric_ = False
 
         return self
-
-    def _logging_callback(self, result):
-        if result["mean_test_score"] > self.best_score:
-            msg = "[CV] new best validation score of {} found with params {}"
-            logger.info(
-                msg.format(result["mean_test_score"], result["params"])
-            )
-            self.best_score = result["mean_test_score"]
-            self.best_params = result["params"]
 
     def fit_metadata(self, meta=None):
         """Get information about how much computation is required for

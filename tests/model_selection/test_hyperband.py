@@ -35,14 +35,11 @@ def test_sklearn(array_type, library, loop, max_iter=27):
                 y = y.compute()
                 chunk_size = X.shape[0]
 
-            sgd_params = {"alpha": np.logspace(-3, 0, num=1000)}
-            kwargs = dict(tol=-np.inf, penalty="elasticnet", random_state=42)
-            if library == "sklearn":
-                model = SGDClassifier(**kwargs)
-                params = sgd_params
-            elif library == "dask-ml":
-                model = Incremental(SGDClassifier(**kwargs))
-                params = sgd_params
+            params = {"alpha": np.logspace(-3, 0, num=1000)}
+            model = SGDClassifier(tol=-np.inf, penalty="elasticnet",
+                                  random_state=42)
+            if library == "dask-ml":
+                model = Incremental(model)
             elif library == "test":
                 model = ConstantFunction()
                 params = {"value": np.linspace(0, 1, num=1000)}
@@ -74,7 +71,6 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             assert search.cv_results_["mean_test_score"][best_idx] == max(
                 search.cv_results_["mean_test_score"]
             )
-            assert search.best_score >= search.best_score_
 
             info_plain = search.fit_metadata()
             info_train = search.fit_metadata(meta=search.meta_)
