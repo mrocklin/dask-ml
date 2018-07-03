@@ -330,7 +330,7 @@ class HyperbandCV(DaskBaseSearchCV):
         ``partial_fit``.
     eta : int, default=3
         How aggressive to be in model tuning. It is not recommended to change
-        this value, and if changed we recommend ``eta=2`` or ``eta=4``.
+        this value, and if changed we recommend ``eta=4``.
         The theory behind Hyperband suggests ``eta=np.e``. Higher
         values imply higher confidence in model selection.
     asynchronous : bool
@@ -431,20 +431,21 @@ class HyperbandCV(DaskBaseSearchCV):
     little parallism (i.e., few workers) will benefit from
     ``asynchronous=False``.
 
-    If dask arrays are passed to
-    :func:`~dask_ml.model_selection.HyperbandCV.fit`, the estimator's
-    ``partial_fit`` method is called over each chunk of the array.
+    ``max_iter`` should be set to be reasonable given the problem, but ideally
+    large enough so that early-stopping is beneficial. ``max_iter`` is
+    recommended to be about 243, and to be some power of ``eta=3``. Higher
+    values will evaluate more parameters.
+
+    At most, one model will see ``max_iter * batch_size`` samples and should
+    all models should converge with this many samples. Natural
+    constraints will likely dictate ``batch_size`` when ``max_iter`` is set
+    with the guidelines above.
 
     There are some limitations to this implementation of Hyperband:
 
     1. The full dataset is requested to be in distributed memory
-    2. The testing dataset must fit comfortably within a single worker
-    3. HyperbandCV does not implement cross validation (and is a todo)
-
-    ``max_iter`` should be set to be reasonable given the problem, but ideally
-    large enough so that early-stopping is beneficial. ``max_iter`` is
-    recommended to be in ``{27, 81, 243}``, and higher values will evaluate
-    more parameters.
+    2. The testing dataset must fit in the memory of a single worker
+    3. HyperbandCV does not implement cross validation
 
     References
     ----------
