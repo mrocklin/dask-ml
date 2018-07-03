@@ -25,10 +25,11 @@ logger = logging.getLogger(__name__)
 
 def _get_hyperband_params(R, eta=3):
     """
-    Arguments
-    ---------
+    Parameters
+    ----------
     R : int
         The maximum number of iterations desired.
+
     Returns
     -------
     N : list
@@ -44,10 +45,10 @@ def _get_hyperband_params(R, eta=3):
     brackets = list(reversed(range(int(s_max + 1))))
     N = [math.ceil(B / R * eta ** s / (s + 1)) for s in brackets]
     R = [int(R * eta ** -s) for s in brackets]
-    return list(map(int, N)), list(map(int, R)), brackets
+    return list(map(int, N)), R, brackets
 
 
-def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
+def _partial_fit(model_and_meta, X, y, meta=None, fit_params=None):
     """
     Call partial_fit on a classifiers with X and y
 
@@ -75,6 +76,8 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
     This function does not modify any item in place.
 
     """
+    if fit_params is None:
+        fit_params = {}
     start = time()
     model = deepcopy(model_and_meta[0])
     if meta is None:
@@ -89,7 +92,7 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params={}):
     return model, meta
 
 
-def _score(model_and_meta, x, y, scorer=None, start=0):
+def _score(model_and_meta, x, y, scorer, start=0):
     model, meta = model_and_meta
     score = scorer(model, x, y)
 
@@ -104,7 +107,28 @@ def _score(model_and_meta, x, y, scorer=None, start=0):
     return meta
 
 
-def _to_promote(result, completed_jobs, eta=None, asynchronous=True):
+def _to_promote(result, completed_jobs, eta=3, asynchronous=True):
+    """
+    Arguments
+    ---------
+    result : dict
+        with keys ``bracket_iter``, ``bracket``, ``num_models``,
+        ``partial_fit_calls``
+    completed_jobs : dict values
+        List of completed jobs. Each job has the same keys as ``results``
+    eta : int
+        How aggressive to be in pruning
+    asynchronous : bool
+        Make a guess of wether to continue with this ``result``?
+
+    Returns
+    -------
+    jobs : list
+        List of jobs to continue training. If asynchronous=True, this is
+        result but modified for additional trainig. If asynchronous=False, this
+        is a list of results in ``bracket_models`` that need to be further
+        trained
+    """
     bracket_models = [
         r
         for r in completed_jobs
@@ -156,14 +180,16 @@ def _hyperband(
     params,
     X,
     y,
-    max_iter=None,
-    eta=None,
-    fit_params={},
+    max_iter=81,
+    eta=3,
+    fit_params=None,
     random_state=42,
-    test_size=None,
+    test_size=0.15,
     scorer=None,
-    asynchronous=None,
+    asynchronous=True,
 ):
+    if fit_params is None:
+        fit_params = {}
     client = default_client()
     rng = check_random_state(random_state)
     N, R, brackets = _get_hyperband_params(max_iter, eta=eta)
@@ -253,7 +279,7 @@ def _hyperband(
     assert set(model_meta_futures.keys()) == set(model_futures.keys())
 
     score_futures = [
-        client.submit(_score, model_meta_future, X_test, y_test, scorer=scorer,
+        client.submit(_score, model_meta_future, X_test, y_test, scorer,
                       start=hyperband_start)
         for _id, model_meta_future in model_meta_futures.items()
     ]
@@ -287,7 +313,7 @@ def _hyperband(
             model_meta_futures[model_id] = model_meta_future
 
             score_future = client.submit(
-                _score, model_meta_future, X_test, y_test, scorer=scorer,
+                _score, model_meta_future, X_test, y_test, scorer,
                 start=hyperband_start
             )
             seq.add(score_future)
@@ -402,21 +428,10 @@ class HyperbandCV(DaskBaseSearchCV):
         ``cv_results_``.
     n_splits_ : int
         The number of cross-validation splits.
-    multimetric_ :
-        Whether or whether this model selection algorithm is multimetric.
-    test_size : float, default 0.15
-        The fraction of test set that should be used for testing.
-    best_score : float
-        The best score, updated live as soon as scores are received.
-        This value is available even if
-        :func:`~dask_ml.model_selection.HyperbandCV` does not
-        complete. Note that this value may be higher than ``best_score_``
-        because intermediate values are considered before the model is
-        finished training.
-    best_params : dict
-        The parameters corresponding to ``best_score``, updated live as
-        soon as scores are received.  This value is available even if
-        :func:`~dask_ml.model_selection.HyperbandCV` does not complete.
+    best_score_ : float
+        The best validation score on the test set.
+    best_params_ : dict
+        The params that are given to the model that achieves ``best_score_``.
 
     Notes
     -----
@@ -440,7 +455,7 @@ class HyperbandCV(DaskBaseSearchCV):
     constraints will likely dictate ``batch_size`` when ``max_iter`` is set
     with the guidelines above.
 
-    There are some limitations to this implementation of Hyperband:
+    There are some limitations to the `current` implementation of Hyperband:
 
     1. The full dataset is requested to be in distributed memory
     2. The testing dataset must fit in the memory of a single worker
@@ -542,7 +557,8 @@ class HyperbandCV(DaskBaseSearchCV):
 
     def fit_metadata(self, meta=None):
         """Get information about how much computation is required for
-        :func:`~dask_ml.model_selection.HyperbandCV.fit`.
+        :func:`~dask_ml.model_selection.HyperbandCV.fit`. This can be called
+        before or after  :func:`~dask_ml.model_selection.HyperbandCV.fit`.
 
         Parameters
         ----------

@@ -99,7 +99,8 @@ Dask-ML implements one adaptive algorithm, Hyperband [1]_ [2]_, which is useful
 in the incremental learning case where we train models over batches of data.
 This requires that your models support the ``.partial_fit(...)`` method.
 It works by trying many possible parameters on the first few chunks of data,
-and then only continues training for those parameters that perform well.
+and then only continues training for those parameters that perform well. The
+best performing model sees every chunk of data with the default configuration.
 
 .. autosummary:: dask_ml.model_selection.HyperbandCV
 
