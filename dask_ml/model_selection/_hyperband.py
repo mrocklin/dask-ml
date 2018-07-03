@@ -324,6 +324,10 @@ class HyperbandCV(DaskBaseSearchCV):
         The maximum number of partial_fit calls to any one model. This should
         be the number of ``partial_fit`` calls required for the model to
         converge.
+    batch_size : float, default=0.2
+        The fraction of the dataset that one partial_fit call will see. At
+        most, ``batch_size * max_iter`` samples will be seen by
+        ``partial_fit``.
     eta : int, default=3
         How aggressive to be in model tuning. It is not recommended to change
         this value, and if changed we recommend ``eta=2`` or ``eta=4``.
@@ -433,11 +437,14 @@ class HyperbandCV(DaskBaseSearchCV):
 
     There are some limitations to this implementation of Hyperband:
 
-    1. The full dataset is requested to be in memory
+    1. The full dataset is requested to be in distributed memory
     2. The testing dataset must fit comfortably within a single worker
+    3. HyperbandCV does not implement cross validation (and is a todo)
 
-        You can control the test dataset size with the test_size parameter
-    3.  This does not implement cross validation
+    ``max_iter`` should be set to be reasonable given the problem, but ideally
+    large enough so that early-stopping is beneficial. ``max_iter`` is
+    recommended to be in ``{27, 81, 243}``, and higher values will evaluate
+    more parameters.
 
     References
     ----------
@@ -455,6 +462,7 @@ class HyperbandCV(DaskBaseSearchCV):
         model,
         params,
         max_iter=81,
+        batch_size=0.2,
         eta=3,
         asynchronous=True,
         random_state=42,
@@ -468,6 +476,7 @@ class HyperbandCV(DaskBaseSearchCV):
         self.test_size = test_size
         self.random_state = random_state
         self.asynchronous = asynchronous
+        self.batch_size = batch_size
 
         self.best_score = None
         self.best_params = None
@@ -491,6 +500,10 @@ class HyperbandCV(DaskBaseSearchCV):
             X = da.from_array(X, chunks=X.shape)
         if isinstance(y, np.ndarray):
             y = da.from_array(y, chunks=y.shape)
+        num_samples = sum(y.chunks[0])
+        samples_per_batch = self.batch_size * num_samples
+        X = X.rechunk({0: samples_per_batch})
+        y = y.rechunk({0: samples_per_batch})
 
         # We always want a concrete scorer, so return_dask_score=False
         # We want this because we're always scoring NumPy arrays

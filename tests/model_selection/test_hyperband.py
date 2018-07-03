@@ -124,11 +124,11 @@ def test_scoring_param(loop, library):
                 "average": [True, False],
             }
             alg1 = HyperbandCV(
-                model, params, max_iter=max_iter, scoring="accuracy"
+                model, params, max_iter=max_iter, scoring="accuracy", random_state=42
             )
             alg1.fit(X, y, classes=da.unique(y))
 
-            alg2 = HyperbandCV(model, params, max_iter=max_iter, scoring="r2")
+            alg2 = HyperbandCV(model, params, max_iter=max_iter, scoring="r2", random_state=42)
             alg2.fit(X, y, classes=da.unique(y))
 
             assert alg1.scoring != alg2.scoring
@@ -145,12 +145,12 @@ def test_async_keyword(loop):  # noqa: F811
 
             params = {"value": np.logspace(-2, 1, num=max_iter)}
             alg0 = HyperbandCV(
-                model, params, asynchronous=False, max_iter=max_iter
+                model, params, asynchronous=False, max_iter=max_iter, random_state=42
             )
             alg0.fit(X, y)
 
             alg1 = HyperbandCV(
-                model, params, asynchronous=True, max_iter=max_iter
+                model, params, asynchronous=True, max_iter=max_iter, random_state=42
             )
             alg1.fit(X, y)
 
@@ -252,7 +252,7 @@ def test_integration(asynchronous, loop):
             X, y = make_classification(n_samples=10, n_features=4, chunks=10)
             model = ConstantFunction()
             params = {"value": scipy.stats.uniform(0, 1)}
-            alg = HyperbandCV(model, params, asynchronous=asynchronous)
+            alg = HyperbandCV(model, params, asynchronous=asynchronous, random_state=42)
             alg.fit(X, y)
             cv_res_keys = set(alg.cv_results_.keys())
             gt_zero = lambda x: x >= 0
