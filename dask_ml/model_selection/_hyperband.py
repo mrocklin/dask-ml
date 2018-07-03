@@ -167,7 +167,6 @@ def _hyperband(
     client = default_client()
     rng = check_random_state(random_state)
     N, R, brackets = _get_hyperband_params(max_iter, eta=eta)
-    #  params = iter(ParameterSampler(params, n_iter=sum(N), random_state=rng))
     params = [
         ParameterSampler(params, 1, random_state=rng.randint(sum(N)))
         for _ in range(sum(N))

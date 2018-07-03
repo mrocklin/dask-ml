@@ -22,22 +22,28 @@ import pytest
     "array_type,library",
     [("dask.array", "dask-ml"), ("numpy", "sklearn"), ("numpy", "test")],
 )
-def test_sklearn(array_type, library, loop, max_iter=27):
+def test_sklearn(array_type, library, loop):
     with cluster() as (s, [a, b]):
         with Client(s["address"], loop=loop):
-            n, d = (1000, 4)
-            chunk_size = n // 2
-            X, y = make_classification(
-                n_samples=n, n_features=d, random_state=42, chunks=chunk_size
-            )
+            n, d = (200, 2)
+
+            rng = da.random.RandomState(42)
+
+            # create observations we know linear models can fit
+            X = rng.normal(size=(n, d), chunks=n // 2)
+            coef_star = rng.uniform(size=d, chunks=d)
+            y = da.sign(X @ coef_star)
+
             if array_type == "numpy":
                 X = X.compute()
                 y = y.compute()
-                chunk_size = X.shape[0]
 
-            params = {"alpha": np.logspace(-3, 0, num=1000)}
+            params = {"loss": ['hinge', 'log', 'modified_huber',
+                               'squared_hinge', 'perceptron'],
+                      'average': [True, False],
+                      'learning_rate': ['constant', 'invscaling', 'optimal']}
             model = SGDClassifier(tol=-np.inf, penalty="elasticnet",
-                                  random_state=42)
+                                  random_state=42, eta0=0.1)
             if library == "dask-ml":
                 model = Incremental(model)
             elif library == "test":
@@ -47,7 +53,7 @@ def test_sklearn(array_type, library, loop, max_iter=27):
             search = HyperbandCV(
                 model,
                 params,
-                max_iter=max_iter,
+                max_iter=27,
                 random_state=42,
                 asynchronous=False,
             )
@@ -55,9 +61,9 @@ def test_sklearn(array_type, library, loop, max_iter=27):
 
             score = search.best_estimator_.score(X, y)
             if library == "sklearn":
-                assert score > 0.7
+                assert score > 0.67
             if library == "dask-ml":
-                assert score > 0.5
+                assert score > 0.67
             elif library == "test":
                 assert score > 0.9
             assert type(search.best_estimator_) == type(model)
@@ -99,13 +105,12 @@ def test_sklearn(array_type, library, loop, max_iter=27):
 def test_scoring_param(loop, library):
     with cluster() as (s, [a, b]):
         with Client(s["address"], loop=loop):
-            max_iter = 27
-            chunk_size = 20
+            max_iter = 9
             X, y = make_classification(
                 n_samples=100,
                 n_features=20,
                 random_state=42,
-                chunks=chunk_size,
+                chunks=20,
             )
             X, y = dask.persist(X, y)
             if library == "sklearn":
@@ -194,6 +199,8 @@ def test_sklearn_async(c, s, a, b):
 
 
 def test_partial_fit_copy():
+    # Tests copying of models by testing on one model and seeing if it carries
+    # through Hyperband
     n, d = 100, 20
     X, y = make_classification(
         n_samples=n, n_features=d, random_state=42, chunks=(n, d)
@@ -220,7 +227,7 @@ def test_partial_fit_copy():
     assert model.t_ < new_model.t_
 
 
-@pytest.mark.parametrize("max_iter", [3, 9, 27, 81])  # noqa: F811
+@pytest.mark.parametrize("max_iter", [27, 81])  # noqa: F811
 def test_meta_computation(loop, max_iter):
     with cluster() as (s, [a, b]):
         with Client(s["address"], loop=loop):
@@ -245,14 +252,13 @@ def test_meta_computation(loop, max_iter):
             assert paper_info["_brackets"] == actual_info["_brackets"]
 
 
-@pytest.mark.parametrize("asynchronous", [True, False])  # noqa: F811
-def test_integration(asynchronous, loop):
+def test_integration(loop):
     with cluster() as (s, [a, b]):
         with Client(s["address"], loop=loop):
             X, y = make_classification(n_samples=10, n_features=4, chunks=10)
             model = ConstantFunction()
             params = {"value": scipy.stats.uniform(0, 1)}
-            alg = HyperbandCV(model, params, asynchronous=asynchronous, random_state=42)
+            alg = HyperbandCV(model, params, asynchronous=True, random_state=42)
             alg.fit(X, y)
             cv_res_keys = set(alg.cv_results_.keys())
             gt_zero = lambda x: x >= 0
