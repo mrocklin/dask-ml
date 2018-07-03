@@ -87,7 +87,8 @@ def test_sklearn(array_type, library, loop):
             # about 20%.
             #  assert info_plain['brackets'] == info_train['brackets']
             #  assert info_train == info_plain
-            for b1, b2 in zip(info_train["_brackets"], info_plain["_brackets"]):
+            for b1, b2 in zip(info_train["_brackets"],
+                              info_plain["_brackets"]):
                 for key, v1 in b1.items():
                     v2 = b2[key]
                     if key == "num_partial_fit_calls":
@@ -128,7 +129,8 @@ def test_scoring_param(loop, library):
                 "average": [True, False],
             }
             alg1 = HyperbandCV(
-                model, params, max_iter=max_iter, scoring="accuracy", random_state=42
+                model, params, max_iter=max_iter, scoring="accuracy",
+                random_state=42
             )
             alg1.fit(X, y, classes=da.unique(y))
 
@@ -151,7 +153,8 @@ def test_async_keyword(loop):  # noqa: F811
 
             params = {"value": np.logspace(-2, 1, num=max_iter)}
             alg0 = HyperbandCV(
-                model, params, asynchronous=False, max_iter=max_iter, random_state=42
+                model, params, asynchronous=False, max_iter=max_iter,
+                random_state=42
             )
             alg0.fit(X, y)
 
@@ -217,7 +220,8 @@ def test_partial_fit_copy():
     model = SGDClassifier(tol=1e-3)
     model.partial_fit(X[: n // 2], y[: n // 2], classes=np.unique(y))
     new_model, new_meta = _partial_fit(
-        (model, meta), X[n // 2 :], y[n // 2 :], fit_params={"classes": np.unique(y)}
+        (model, meta), X[n // 2:], y[n // 2:],
+        fit_params={"classes": np.unique(y)}
     )
     assert meta != new_meta
     assert new_meta["iterations"] == 1
@@ -233,7 +237,8 @@ def test_meta_computation(loop, max_iter):
             model = ConstantFunction()
             params = {"value": scipy.stats.uniform(0, 1)}
             alg = HyperbandCV(
-                model, params, max_iter=max_iter, random_state=0, asynchronous=False
+                model, params, max_iter=max_iter, random_state=0,
+                asynchronous=False
             )
             alg.fit(X, y)
             paper_info = alg.fit_metadata()
@@ -256,7 +261,7 @@ def test_meta_computation(loop, max_iter):
             assert paper_info["_brackets"] == actual_info["_brackets"]
 
 
-def test_integration(loop):
+def test_integration(loop):  # noqa: F811
     with cluster() as (s, [a, b]):
         with Client(s["address"], loop=loop):
             X, y = make_classification(n_samples=10, n_features=4, chunks=10)
@@ -288,7 +293,8 @@ def test_integration(loop):
                 ("time_scored", float, gt_zero),
             ]:
                 if dtype:
-                    assert all(is_type(x, dtype) for x in alg.cv_results_[column])
+                    assert all(is_type(x, dtype)
+                               for x in alg.cv_results_[column])
                 if condition:
                     assert all(condition(x) for x in alg.cv_results_[column])
                 cv_res_keys -= {column}
