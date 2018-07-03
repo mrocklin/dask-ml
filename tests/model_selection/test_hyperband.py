@@ -32,7 +32,7 @@ def test_sklearn(array_type, library, loop):
             # create observations we know linear models can fit
             X = rng.normal(size=(n, d), chunks=n // 2)
             coef_star = rng.uniform(size=d, chunks=d)
-            y = da.sign(X @ coef_star)
+            y = da.sign(X.dot(coef_star))
 
             if array_type == "numpy":
                 X = X.compute()
@@ -258,7 +258,8 @@ def test_integration(loop):
             X, y = make_classification(n_samples=10, n_features=4, chunks=10)
             model = ConstantFunction()
             params = {"value": scipy.stats.uniform(0, 1)}
-            alg = HyperbandCV(model, params, asynchronous=True, random_state=42)
+            alg = HyperbandCV(model, params, asynchronous=True,
+                              max_iter=9, random_state=42)
             alg.fit(X, y)
             cv_res_keys = set(alg.cv_results_.keys())
             gt_zero = lambda x: x >= 0

@@ -476,7 +476,7 @@ class HyperbandCV(DaskBaseSearchCV):
         self,
         model,
         params,
-        max_iter=81,
+        max_iter=243,
         batch_size=0.2,
         eta=3,
         asynchronous=True,
