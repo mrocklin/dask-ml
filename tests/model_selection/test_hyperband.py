@@ -247,7 +247,7 @@ def test_meta_computation(loop, max_iter):
             assert paper_info["num_models"] == actual_info["num_models"]
             bounds = {
                 27: {"paper": (321, 321), "actual": (321, 321)},
-                81: {"paper": (1419, 1419), "actual": (1350, 1420)},
+                81: {"paper": (1419, 1419), "actual": (1340, 1425)},
             }
             assert (
                 bounds[max_iter]["paper"][0] <=
