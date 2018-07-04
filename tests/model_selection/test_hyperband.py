@@ -159,7 +159,8 @@ def test_async_keyword(loop):  # noqa: F811
             alg0.fit(X, y)
 
             alg1 = HyperbandCV(
-                model, params, asynchronous=True, max_iter=max_iter, random_state=42
+                model, params, asynchronous=True, max_iter=max_iter,
+                random_state=42
             )
             alg1.fit(X, y)
 
