@@ -238,17 +238,17 @@ def _hyperband(
                 "bracket": "bracket={}".format(s),
                 "num_models": n,
                 "bracket_iter": 0.0,
+                "iterations": 0.0,
                 "model_id": _model_id(s, n_i),
+                "mean_test_score": 0.0,
                 "mean_fit_time": 0.0,
                 "mean_score_time": 0,
+                "mean_copy_time": 0.0,
+                "mean_train_score": None,
                 "std_fit_time": 0.0,
                 "std_score_time": 0.0,
-                "mean_test_score": 0.0,
                 "std_test_score": 0.0,
-                "mean_train_score": None,
                 "std_train_score": None,
-                "iterations": 0.0,
-                "mean_copy_time": 0.0,
                 "params": params[_model_id(s, n_i)],
             }
             for n_i in range(n)
@@ -445,15 +445,32 @@ class HyperbandCV(DaskBaseSearchCV):
     little parallism (i.e., few workers) will benefit from
     ``asynchronous=False``.
 
-    ``max_iter`` should be set to be reasonable given the problem, but ideally
-    large enough so that early-stopping is beneficial. ``max_iter`` is
-    recommended to be about 243, and to be some power of ``eta=3``. Higher
-    values will evaluate more parameters.
+    At least one model sees ``max_iter * batch_size`` samples, which
+    should be large enough for convergence (or close to it). Often
+    there are hard constraints on ``max_iter * batch_size``
+    (e.g., time or deadline constraints).
 
-    At most, one model will see ``max_iter * batch_size`` samples and should
-    all models should converge with this many samples. Natural
-    constraints will likely dictate ``batch_size`` when ``max_iter`` is set
-    with the guidelines above.
+    ``max_iter`` is (almost) proportional to the number of parameters
+    evaluated, as well as being the maximum number of times
+    ``partial_fit`` is called for any model.
+    ``batch_size`` is the fraction of the dataset that each ``partial_fit``
+    call sees.
+
+    ``max_iter`` should be set to be reasonable given the problem and
+    parameter search space, but ideally
+    large enough so that early-stopping is beneficial. Higher values will
+    evaluate more parameters. We recommend setting ``max_iter * batch_size``,
+    then using :func:`~dask_ml.model_selection.HyperbandCV.fit_metadata`
+    alongside natural constraints (time or deadline constraints) to determine
+    ``max_iter`` and ``batch_size``.
+
+    The authors of Hyperband use ``max_iter=300`` and ``batch_size=0.25``
+    to tune deep learning models in [1]_. They tune 6 stochastic gradient
+    descent parameters alongside two problem formulation hyperparameters.
+    For :func:`~sklearn.linear_model.SGDClassifier`, examples of "stochastic
+    gradient descent parameters" are ``learning_rate`` and ``eta0``.
+    Examples of "problem formulation hyperparameters" are ``alpha`` and
+    ``l1_ratio`` when ``penalty='elasticnet'``.
 
     There are some limitations to the `current` implementation of Hyperband:
 
@@ -476,7 +493,7 @@ class HyperbandCV(DaskBaseSearchCV):
         self,
         model,
         params,
-        max_iter=243,
+        max_iter=300,
         batch_size=0.2,
         eta=3,
         asynchronous=True,
