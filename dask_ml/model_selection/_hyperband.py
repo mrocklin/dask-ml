@@ -56,7 +56,7 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params=None):
     ---------
     model_and_meta : tuple, (model: any, meta: dict)
         model needs to support partial_fit. meta is assumed to have keys
-        ``mean_copy_time, iterations, partial_fit_calls, mean_fit_time``.
+        ``iterations, partial_fit_calls``.
         partial_fit will be called on the model until
         ``meta['iterations'] >= meta['partial_fit_calls']``
     X, y : np.ndarray, np.ndarray
@@ -78,32 +78,26 @@ def _partial_fit(model_and_meta, X, y, meta=None, fit_params=None):
     """
     if fit_params is None:
         fit_params = {}
-    start = time()
     model = deepcopy(model_and_meta[0])
     if meta is None:
         meta = deepcopy(model_and_meta[1])
     else:
         meta = deepcopy(meta)
-    meta["mean_copy_time"] += time() - start
+
     while meta["iterations"] < meta["partial_fit_calls"]:
         model.partial_fit(X, y, **fit_params)
         meta["iterations"] += 1
-    meta["mean_fit_time"] += time() - start
+
     return model, meta
 
 
-def _score(model_and_meta, x, y, scorer, start=0):
+def _score(model_and_meta, x, y, scorer):
     model, meta = model_and_meta
     score = scorer(model, x, y)
 
-    score_start = time()
     meta = deepcopy(meta)
-    meta["mean_copy_time"] += time() - score_start
     meta.update(score=score)
-    assert meta["iterations"] > 0
-    meta["mean_score_time"] += time() - score_start
     meta["mean_test_score"] = score
-    meta["time_scored"] = time() - start
     return meta
 
 
@@ -241,12 +235,7 @@ def _hyperband(
                 "iterations": 0.0,
                 "model_id": _model_id(s, n_i),
                 "mean_test_score": 0.0,
-                "mean_fit_time": 0.0,
-                "mean_score_time": 0,
-                "mean_copy_time": 0.0,
                 "mean_train_score": None,
-                "std_fit_time": 0.0,
-                "std_score_time": 0.0,
                 "std_test_score": 0.0,
                 "std_train_score": None,
                 "params": params[_model_id(s, n_i)],
@@ -262,7 +251,6 @@ def _hyperband(
         for j, meta in enumerate(metas)
     }
 
-    hyperband_start = time()
     model_meta_futures = {
         meta["model_id"]: client.submit(
             _partial_fit,
@@ -279,8 +267,7 @@ def _hyperband(
     assert set(model_meta_futures.keys()) == set(model_futures.keys())
 
     score_futures = [
-        client.submit(_score, model_meta_future, X_test, y_test, scorer,
-                      start=hyperband_start)
+        client.submit(_score, model_meta_future, X_test, y_test, scorer)
         for _id, model_meta_future in model_meta_futures.items()
     ]
 
@@ -314,7 +301,6 @@ def _hyperband(
 
             score_future = client.submit(
                 _score, model_meta_future, X_test, y_test, scorer,
-                start=hyperband_start
             )
             seq.add(score_future)
 
@@ -399,10 +385,6 @@ class HyperbandCV(DaskBaseSearchCV):
 
         * ``rank_test_score``
         * ``model_id``
-        * ``mean_fit_time``
-        * ``mean_score_time``
-        * ``std_fit_time``
-        * ``std_score_time``
         * ``mean_test_score``
         * ``std_test_score``
         * ``partial_fit_calls``
@@ -410,7 +392,6 @@ class HyperbandCV(DaskBaseSearchCV):
         * ``std_train_score``
         * ``params``
         * ``param_value``
-        * ``mean_copy_time``
 
     meta_ : dict
         Information about every model that was trained. Can be used as input to
