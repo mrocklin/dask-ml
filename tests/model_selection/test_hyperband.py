@@ -171,7 +171,7 @@ def test_async_keyword(loop):  # noqa: F811
 
 
 @gen_cluster(client=True, timeout=None)
-def test_sklearn_async(c, s, a, b):
+def test_basic(c, s, a, b):
     X, y = make_classification(
         n_samples=10000, n_features=20, random_state=42, chunks=1000
     )
@@ -188,6 +188,13 @@ def test_sklearn_async(c, s, a, b):
     }
     search = HyperbandCV(model, params, start=50, eta=1.2, random_state=42)
     yield search._fit(X, y, X_test=X_test, y_test=y_test, classes=[0, 1])
+
+    # Ensure that we touch all data
+    keys = {t[0] for t in s.transition_log}
+    assert all(str(k) in keys for kk in X.__dask_keys__() for k in kk)
+
+    while c.futures or s.tasks:  # Clean after running
+        yield gen.sleep(0.01)
 
 
 def test_partial_fit_copy():
