@@ -15,7 +15,7 @@ import toolz
 
 import dask
 import dask.array as da
-from dask.distributed import as_completed, default_client, futures_of
+from dask.distributed import as_completed, default_client, futures_of, Future
 from distributed.utils import log_errors
 from distributed.metrics import time
 
@@ -103,7 +103,7 @@ def _hyperband(
     fit_params = fit_params or {}
     client = default_client()
     rng = check_random_state(random_state)
-    param_iterator = iter(ParameterSampler(params, 1000000, random_state=rng))
+    param_iterator = iter(ParameterSampler(params, start, random_state=rng))
 
     info = {}
     models = {}
@@ -141,14 +141,29 @@ def _hyperband(
     # create order by which we process batches
     order = list(range(len(X)))
     rng.shuffle(order)
+    seen = {}
+    tokens = {}
 
-    X_futures = {}
-    y_futures = {}
+    def get_futures(epoch):
+        j = order[epoch % len(order)]
 
-    j = order[0]
-    X_future = X_futures[order[0]] = client.compute(X[order[0]])
-    y_future = y_futures[order[0]] = client.compute(y[order[0]])
+        if epoch < len(order) and j not in seen:  # new future, need to tell scheduler about it
+            X_future = client.compute(X[j])
+            y_future = client.compute(y[j])
+            seen[j] = (X_future.key, y_future.key)
 
+            # This is a hack to keep the futures in the scheduler but not in  memory
+            X_token = client.submit(len, X_future)
+            y_token = client.submit(len, y_future)
+            tokens[epoch] = (X_token, y_token)
+
+            return X_future, y_future
+
+        else:
+            x_key, y_key = seen[j]
+            return Future(x_key), Future(y_key)
+
+    X_future, y_future = get_futures(0)
     for ident, model in models.items():
         model = client.submit(_partial_fit, model, X_future, y_future, fit_params)
         score = client.submit(_score, model, X_test, y_test, scorer)
@@ -175,13 +190,8 @@ def _hyperband(
             model = models[ident]
         except KeyError:
             import pdb; pdb.set_trace()
-        j = order[(epoch + 1) % len(order)]
-        if j not in X_futures:
-            X_futures[j] = client.compute(X[j])
-            y_futures[j] = client.compute(y[j])
-        X_future = X_futures[j]
-        y_future = y_futures[j]
 
+        X_future, y_future = get_futures(epoch + 1)
         model = client.submit(_partial_fit, model, X_future, y_future,
                               fit_params, priority=-epoch + meta['score'])
         score = client.submit(_score, model, X_test, y_test, scorer,
@@ -192,8 +202,6 @@ def _hyperband(
 
         # finished entire bracket of models
         if epoch == current_epoch and len(done[epoch]) >= len(models):
-            del X_futures[order[epoch % len(order)]]
-            del y_futures[order[epoch % len(order)]]
             current_epoch += 1
             target = max(1, int(start / (1 + current_epoch)))
             print(current_epoch, target)
