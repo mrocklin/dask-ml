@@ -158,7 +158,7 @@ def _hyperband(
     done = defaultdict(set)
     seq = as_completed(scores.values(), with_results=True)
     current_epoch = 0
-    target = len(models) / (eta ** current_epoch)
+    target = start / (1 + current_epoch)
     optimistic = set()
 
     while not seq.is_empty():  # async for future, result in seq:
@@ -175,7 +175,7 @@ def _hyperband(
             model = models[ident]
         except KeyError:
             import pdb; pdb.set_trace()
-        j = order[epoch + 1 % len(order)]
+        j = order[(epoch + 1) % len(order)]
         if j not in X_futures:
             X_futures[j] = client.compute(X[j])
             y_futures[j] = client.compute(y[j])
@@ -191,14 +191,17 @@ def _hyperband(
         optimistic.add(ident)
 
         # finished entire bracket of models
-        if epoch == current_epoch and len(done[epoch]) >= target:
+        if epoch == current_epoch and len(done[epoch]) >= len(models):
             del X_futures[order[epoch % len(order)]]
             del y_futures[order[epoch % len(order)]]
             current_epoch += 1
-            target = max(1, int(len(models) / (eta ** current_epoch)))
+            target = max(1, int(start / (1 + current_epoch)))
+            print(current_epoch, target)
 
-            good = set(toolz.topk(target, info, key=lambda i: info[i]['score']))
+            good = set(toolz.topk(target, models, key=lambda i: info[i]['score']))
             bad = set(models) - good
+            if len(set(models) - bad) != target:
+                import pdb; pdb.set_trace()
             for ident in bad:
                 del models[ident]
                 del scores[ident]
@@ -206,10 +209,12 @@ def _hyperband(
             for ident in optimistic & good:
                 seq.add(scores[ident])
 
-            if current_epoch == len(order):
-                rng.shuffle(order)
+            # if current_epoch % len(order) == 0:
+            #     rng.shuffle(order)
 
             optimistic.clear()
+
+            assert len(models) == target
 
             if len(good) == 1:
                 break
