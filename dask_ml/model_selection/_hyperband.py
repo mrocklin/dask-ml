@@ -174,6 +174,7 @@ def _hyperband(
     seq = as_completed(scores.values(), with_results=True)
     current_epoch = 0
     target = start / (1 + current_epoch)
+    next_epoch = current_epoch + 1
     optimistic = set()
 
     while not seq.is_empty():  # async for future, result in seq:
@@ -191,9 +192,10 @@ def _hyperband(
         except KeyError:
             import pdb; pdb.set_trace()
 
-        X_future, y_future = get_futures(epoch + 1)
-        model = client.submit(_partial_fit, model, X_future, y_future,
-                              fit_params, priority=-epoch + meta['score'])
+        for i in range(epoch, next_epoch):
+            X_future, y_future = get_futures(i + 1)
+            model = client.submit(_partial_fit, model, X_future, y_future,
+                                  fit_params, priority=-i + meta['score'])
         score = client.submit(_score, model, X_test, y_test, scorer,
                 priority=-epoch + meta['score'])
         models[ident] = model
@@ -202,9 +204,11 @@ def _hyperband(
 
         # finished entire bracket of models
         if epoch == current_epoch and len(done[epoch]) >= len(models):
-            current_epoch += 1
+            current_epoch = next_epoch
             target = max(1, int(start / (1 + current_epoch)))
-            print(current_epoch, target)
+            next_epoch = current_epoch + 1
+            while int(target) == int(start / (1 + next_epoch)):
+                next_epoch += 1
 
             good = set(toolz.topk(target, models, key=lambda i: info[i]['score']))
             bad = set(models) - good
