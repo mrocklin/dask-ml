@@ -170,37 +170,24 @@ def test_async_keyword(loop):  # noqa: F811
             assert alg0.score(X, y) == alg1.score(X, y)
 
 
-@gen_cluster(client=True)
+@gen_cluster(client=True, timeout=None)
 def test_sklearn_async(c, s, a, b):
-    max_iter = 27
-    chunk_size = 20
     X, y = make_classification(
-        n_samples=100, n_features=20, random_state=42, chunks=chunk_size
+        n_samples=10000, n_features=20, random_state=42, chunks=1000
     )
-    X, y = dask.persist(X, y)
-    yield wait([X, y])
 
-    kwargs = dict(tol=1e-3, penalty="elasticnet", random_state=42)
+    X_test, y_test = X[:1000], y[:1000]
+    X_train, y_train = X[1000:], y[1000:]
 
-    model = SGDClassifier(**kwargs)
+    model = SGDClassifier(tol=1e-3, penalty="elasticnet", random_state=42)
 
     params = {
         "alpha": np.logspace(-2, 1, num=1000),
         "l1_ratio": np.linspace(0, 1, num=1000),
         "average": [True, False],
     }
-    search = HyperbandCV(model, params, max_iter=max_iter, random_state=42)
-    s_tasks = set(s.tasks)
-    c_futures = set(c.futures)
-    yield search._fit(X, y, classes=da.unique(y))
-
-    assert set(c.futures) == c_futures
-    start = time()
-    while set(s.tasks) != s_tasks:
-        yield gen.sleep(0.01)
-        assert time() < start + 5
-
-    assert len(set(search.cv_results_["model_id"])) == 49
+    search = HyperbandCV(model, params, start=50, eta=1.2, random_state=42)
+    yield search._fit(X, y, X_test=X_test, y_test=y_test, classes=[0, 1])
 
 
 def test_partial_fit_copy():
