@@ -175,7 +175,7 @@ def _hyperband(
             model = models[ident]
         except KeyError:
             import pdb; pdb.set_trace()
-        j = order[epoch + 1]
+        j = order[epoch + 1 % len(order)]
         if j not in X_futures:
             X_futures[j] = client.compute(X[j])
             y_futures[j] = client.compute(y[j])
@@ -192,8 +192,8 @@ def _hyperband(
 
         # finished entire bracket of models
         if epoch == current_epoch and len(done[epoch]) >= target:
-            del X_futures[order[epoch]]
-            del y_futures[order[epoch]]
+            del X_futures[order[epoch % len(order)]]
+            del y_futures[order[epoch % len(order)]]
             current_epoch += 1
             target = max(1, int(len(models) / (eta ** current_epoch)))
 
@@ -205,6 +205,9 @@ def _hyperband(
 
             for ident in optimistic & good:
                 seq.add(scores[ident])
+
+            if current_epoch == len(order):
+                rng.shuffle(order)
 
             optimistic.clear()
 
