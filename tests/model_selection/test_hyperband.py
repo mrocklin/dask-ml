@@ -186,7 +186,22 @@ def test_basic(c, s, a, b):
         "l1_ratio": np.linspace(0, 1, num=1000),
         "average": [True, False],
     }
-    search = HyperbandCV(model, params, start=50, eta=1.2, random_state=42)
+    search = HyperbandCV(model, params, start=50, random_state=42)
+
+
+    X, y = make_classification(n_samples=5000000, n_features=20,
+                           random_state=42, chunks=100000)
+    kwargs = dict(tol=1e-3, penalty='elasticnet', random_state=42)
+    model = SGDClassifier(**kwargs)
+
+    params = {'alpha': np.logspace(-2, 1, num=1000),
+	      'l1_ratio': np.linspace(0, 1, num=1000),
+	      'average': [True, False]}
+    search = HyperbandCV(model, params, start=100)
+    X_test, y_test = X[:100000], y[:100000]
+    X = X[100000:]
+    y = y[100000:]
+
     yield search._fit(X, y, X_test=X_test, y_test=y_test, classes=[0, 1])
 
     # Ensure that we touch all data
