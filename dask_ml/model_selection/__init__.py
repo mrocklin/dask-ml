@@ -8,7 +8,6 @@ from ._search import (
     compute_n_splits, check_cv
 )
 from ._split import ShuffleSplit, train_test_split
-from ._hyperband import HyperbandCV
 
 
 __all__ = [
@@ -16,7 +15,6 @@ __all__ = [
     'RandomizedSearchCV',
     'ShuffleSplit',
     'train_test_split',
-    'HyperbandCV',
     'compute_n_splits',
     'check_cv',
 ]
